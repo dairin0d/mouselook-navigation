@@ -18,7 +18,9 @@ This add-on grew out from the ideas I had about making MMB (Middle Mouse Button)
 * Ability to freely switch between orbit/pan/dolly/zoom and be able to do it with just the mouse (e.g. MMB is orbit, MMB+LMB is zoom, MMB+ RMB is pan)
 * Have a 3D crosshair in MMB navigation to indicate where the orbiting origin is
 * Make it less easy to accidentally rotate view in Ortho mode
+
 I also think that Blender's native Fly/FPS navigation operators have some room for improvement, but I didn't get to implement that yet. I was also considering some sort of "view history stack", but there seem to be addons for that already.
+
 moth3r suggested some additional features, like ZBrush mode (which seems to be especially useful for tablet users), some control setups, and provided a lot of useful feedback. Thanks!
 
 ## Usage
