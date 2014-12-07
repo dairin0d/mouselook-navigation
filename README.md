@@ -44,7 +44,7 @@ Options in N-panel ("Mouselook navigation" subpanel)
 
 Known issues/missing features:
 * Blender trackball mode doesn't actually behave like in Blender
-* "Auto Depth" (rotation around the point under mouse) is not yet implemented
+* "Auto Depth", "Rotate Around Selection", "Camera Parent Lock" are not yet implemented
 * Full FPS/Fly navigation
 
 About:
