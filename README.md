@@ -1,6 +1,8 @@
-mouselook-navigation
+Mouselook navigation
 ====================
 Extra 3D view navigation features
+
+Right now, the addon auto-registers a keymap on Middle Mouse Button with some default control scheme (which is subject to change), but the control scheme can be adjusted via operator properties (see the corresponding keymap).
 
 Operator properties:
 * Default mode -- the operator would start in this mode if other mode keys are not pressed
