@@ -30,9 +30,9 @@ Options in N-panel ("Mouselook navigation" subpanel)
 * FPS speed -- speed multiplier for FPS movement
 * Zoom speed -- speed multiplier for zooming
 * Trackball mode -- what trackball algorithm to use
-** Center -- rotation depends only on mouse speed and not on mouse position; has the most stable and predictable behavior
-** Wrapped -- like Center, but rotation depends on mouse position
-** Blender -- uses the same trackball algorithm as in Blender (in theory. In practice I haven't figured out how to make it behave exactly like in Blender)
+  * Center -- rotation depends only on mouse speed and not on mouse position; has the most stable and predictable behavior
+  * Wrapped -- like Center, but rotation depends on mouse position
+  * Blender -- uses the same trackball algorithm as in Blender (in theory. In practice I haven't figured out how to make it behave exactly like in Blender)
 * Orbit snap subdivs -- number of intermediate angles to which view rotation can be snapped (1 snaps to each 90 degrees, 2 snaps to each 45 degrees, and so on)
 * Orbit snap->ortho -- if Auto Perspective is enabled in user preferences, rotation snapping would switch view to Orthographic mode
 * Rotation speed -- speed multiplier for rotation
