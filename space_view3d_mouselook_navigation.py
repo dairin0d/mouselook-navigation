@@ -618,6 +618,7 @@ def snap_pixel_vector(v): # to have 2d-stable 3d drawings
 # It is assumed that the arguments to this routine are in the range
 # (-1.0 ... 1.0)
 def trackball(p1x, p1y, p2x, p2y, TRACKBALLSIZE=1.0):
+    #"""
     #if (p1x == p2x) and (p1y == p2y):
     #    return Quaternion() # Zero rotation
     
@@ -638,6 +639,42 @@ def trackball(p1x, p1y, p2x, p2y, TRACKBALLSIZE=1.0):
     phi = 2.0 * t # how much to rotate about axis
     
     return Quaternion(a, phi)
+    #"""
+    
+    '''
+    #float phi, si, q1[4], dvec[3], newvec[3];
+    
+    newvec = Vector((p2x, p2y, -tb_project_to_sphere(TRACKBALLSIZE, p2x, p2y))
+    #calctrackballvec(&vod->ar->winrct, x, y, newvec);
+    
+    dvec = newvec - vod->trackvec
+    #sub_v3_v3v3(dvec, newvec, vod->trackvec);
+    
+    si = dvec.magnitude / (2.0 * TRACKBALLSIZE)
+    
+    a = vod->trackvec.cross(newvec)
+    #cross_v3_v3v3(q1 + 1, vod->trackvec, newvec);
+    a.normalize()
+    #normalize_v3(q1 + 1);
+    
+    # Allow for rotation beyond the interval [-pi, pi]
+    while (si > 1.0):
+        si -= 2.0
+    
+    # This relation is used instead of
+    # - phi = asin(si) so that the angle
+    # - of rotation is linearly proportional
+    # - to the distance that the mouse is
+    # - dragged.
+    phi = si * (math.pi / 2.0)
+    
+    return Quaternion(a, phi)
+    #q1[0] = math.cos(phi)
+    #mul_v3_fl(q1 + 1, math.sin(phi))
+    #mul_qt_qtqt(vod->viewquat, q1, vod->oldquat);
+    '''
+
+
 # Project an x,y pair onto a sphere of radius r OR a hyperbolic sheet
 # if we are away from the center of the sphere.
 def tb_project_to_sphere(r, x, y):
@@ -1049,7 +1086,71 @@ class MouselookNavigation(bpy.types.Operator):
             p1 = Vector((p1.x/halfsize.x, p1.y/halfsize.y))
             p2 = Vector((p2.x/halfsize.x, p2.y/halfsize.y))
             q = trackball(p1.x, p1.y, p2.x, p2.y, 1.1)
+            
+            """
+            TRACKBALLSIZE = 1.1
+            #region = self.sv.region
+            #halfsize = Vector((region.width, region.height))*0.5
+            
+            pmouse = mouse - mouse_delta
+            px = (halfsize.x - pmouse.x) / (region.width / 4)
+            py = (halfsize.y - pmouse.y) / (region.height / 2)
+            #vod_trackvec = Vector((px, py, -tb_project_to_sphere(TRACKBALLSIZE, px, py)))
+            vod_trackvec = Vector((px, -tb_project_to_sphere(TRACKBALLSIZE, px, py), py))
+            #vod_trackvec = self.vod_trackvec
+            
+            #x = BLI_rcti_cent_x(rect) - mx;
+            #x /= (float)(BLI_rcti_size_x(rect) / 4);
+            #y = BLI_rcti_cent_y(rect) - my;
+            #y /= (float)(BLI_rcti_size_y(rect) / 2);
+            
+            x = (halfsize.x - mouse.x) / (region.width / 4)
+            y = (halfsize.y - mouse.y) / (region.height / 2)
+            
+            #float phi, si, q1[4], dvec[3], newvec[3];
+            
+            #newvec = Vector((x, y, -tb_project_to_sphere(TRACKBALLSIZE, x, y)))
+            newvec = Vector((x, -tb_project_to_sphere(TRACKBALLSIZE, x, y), y))
+            #calctrackballvec(&vod->ar->winrct, x, y, newvec);
+            
+            dvec = newvec - vod_trackvec
+            #sub_v3_v3v3(dvec, newvec, vod->trackvec);
+            
+            si = dvec.magnitude / (2.0 * TRACKBALLSIZE)
+            
+            a = vod_trackvec.cross(newvec)
+            #cross_v3_v3v3(q1 + 1, vod->trackvec, newvec);
+            a.normalize()
+            #normalize_v3(q1 + 1);
+            
+            # Allow for rotation beyond the interval [-pi, pi]
+            while (si > 1.0):
+                si -= 2.0
+            
+            # This relation is used instead of
+            # - phi = asin(si) so that the angle
+            # - of rotation is linearly proportional
+            # - to the distance that the mouse is
+            # - dragged.
+            phi = si * (math.pi / 2.0)
+            
+            #q = Quaternion(a, phi)
+            #q1[0] = math.cos(phi)
+            #mul_v3_fl(q1 + 1, math.sin(phi))
+            #mul_qt_qtqt(vod->viewquat, q1, vod->oldquat);
+            
+            #vod_trackvec.y = 0
+            #newvec.y = 0
+            
+            vod_trackvec.normalize()
+            newvec.normalize()
+            #print("{} -> {}".format(vod_trackvec, newvec))
+            #q = vod_trackvec.rotation_difference(newvec)
+            q = newvec.rotation_difference(vod_trackvec)
+            """
+            
             axis, angle = q.to_axis_angle()
+            #print("q: {}, {}".format(axis, angle))
             axis = self.sv.matrix.to_3x3() * axis
             q = Quaternion(axis, angle * speed_rot*200)
             self.rot = q * self.rot
@@ -1139,6 +1240,17 @@ class MouselookNavigation(bpy.types.Operator):
         raycast_result = context.scene.ray_cast(ray_data[0], ray_data[1])
         
         self.create_keycheckers(event)
+        
+        
+        TRACKBALLSIZE = 1.1
+        region = self.sv.region
+        halfsize = Vector((region.width, region.height))*0.5
+        
+        x = (halfsize.x - mouse.x) / (region.width / 4)
+        y = (halfsize.y - mouse.y) / (region.height / 2)
+        self.vod_trackvec = Vector((x, y, -tb_project_to_sphere(TRACKBALLSIZE, x, y)))
+        
+        
         
         #if rv3d.view_perspective == 'CAMERA':
         #    rv3d.view_perspective = 'PERSP'
@@ -1466,7 +1578,7 @@ class MouselookNavigationRuntimeSettings(bpy.types.PropertyGroup):
     fps_horizontal = bpy.props.BoolProperty(name="FPS horizontal", default=False)
     fps_speed_modifier = bpy.props.FloatProperty(name="FPS speed", default=1.0)
     zoom_speed_modifier = bpy.props.FloatProperty(name="Zoom speed", default=1.0)
-    trackball_mode = bpy.props.EnumProperty(items=[('BLENDER', 'Blender', 'Blender'), ('WRAPPED', 'Wrapped', 'Wrapped'), ('CENTER', 'Center', 'Center')], name="Trackball mode", default='BLENDER')
+    trackball_mode = bpy.props.EnumProperty(items=[('BLENDER', 'Blender', 'Blender'), ('WRAPPED', 'Wrapped', 'Wrapped'), ('CENTER', 'Center', 'Center')], name="Trackball mode", default='WRAPPED')
     rotation_snap_subdivs = bpy.props.IntProperty(name="Orbit snap subdivs", default=1, min=1)
     rotation_snap_autoperspective = bpy.props.BoolProperty(name="Orbit snap->ortho", default=True)
     rotation_speed_modifier = bpy.props.FloatProperty(name="Rotation speed", default=1.0)
