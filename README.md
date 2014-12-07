@@ -1,12 +1,25 @@
 ## Extra 3D view navigation features
 
 ## Authors:
+
 dairin0d - original author - developer
+
 Ivan Santic (MOTH3R) - coauthor, added idea (ZBrush mode nav), beta-tester
 
 ## Description
 
 3D-Mouse-look navigation simplifies 3D view navigation inside Blender by utilizing a couple of features like ZBrush type of navigation and FPS mode. You can also customize most of the options yourself. Some of the options are avalible through N-panel as well.
+
+## About:
+
+This add-on grew out from the ideas I had about making MMB (Middle Mouse Button) navigation in Blender more convenient for myself. These were:
+* Be able to cancel MMB rotation, with the view returning to where it was
+* Ability to move in First Person Shooter style (using WASD control scheme) while orbiting
+* Ability to freely switch between orbit/pan/dolly/zoom and be able to do it with just the mouse (e.g. MMB is orbit, MMB+LMB is zoom, MMB+ RMB is pan)
+* Have a 3D crosshair in MMB navigation to indicate where the orbiting origin is
+* Make it less easy to accidentally rotate view in Ortho mode
+I also think that Blender's native Fly/FPS navigation operators have some room for improvement, but I didn't get to implement that yet. I was also considering some sort of "view history stack", but there seem to be addons for that already.
+moth3r suggested some additional features, like ZBrush mode (which seems to be especially useful for tablet users), some control setups, and provided a lot of useful feedback. Thanks!
 
 ## Usage
 
@@ -68,13 +81,3 @@ Right now, the addon auto-registers a keymap on Middle Mouse Button with some de
 * Full FPS/Fly navigation
 * In quandview, clip mode is not updated
 * Suggested by moth3r: there is no option to make grid disappear when rotating the view in Ortho mode (this is actually not an issue with the addon, but a "feature" of the C++ side not controllable through UI or python API)
-
-## About:
-This add-on grew out from the ideas I had about making MMB (Middle Mouse Button) navigation in Blender more convenient for myself. These were:
-* Be able to cancel MMB rotation, with the view returning to where it was
-* Ability to move in First Person Shooter style (using WASD control scheme) while orbiting
-* Ability to freely switch between orbit/pan/dolly/zoom and be able to do it with just the mouse (e.g. MMB is orbit, MMB+LMB is zoom, MMB+ RMB is pan)
-* Have a 3D crosshair in MMB navigation to indicate where the orbiting origin is
-* Make it less easy to accidentally rotate view in Ortho mode
-I also think that Blender's native Fly/FPS navigation operators have some room for improvement, but I didn't get to implement that yet. I was also considering some sort of "view history stack", but there seem to be addons for that already.
-moth3r suggested some additional features, like ZBrush mode (which seems to be especially useful for tablet users), some control setups, and provided a lot of useful feedback. Thanks!
