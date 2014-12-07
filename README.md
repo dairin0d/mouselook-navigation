@@ -1,14 +1,14 @@
-*Extra 3D view navigation features*
+## Extra 3D view navigation features
 
-*Authors:*
+## Authors:
 dairin0d - original author - developer
 Ivan Santic (MOTH3R) - coauthor, added idea (ZBrush mode nav), beta-tester
 
-*Description*
+## Description
 
 3D-Mouse-look navigation simplifies 3D view navigation inside Blender by utilizing a couple of features like ZBrush type of navigation and FPS mode. You can also customize most of the options yourself. Some of the options are avalible through N-panel as well.
 
-*Usage*
+## Usage
 
 ZBrush navigation
 * Move - Alt+Middle-click & drag (can be over the model)
@@ -22,7 +22,7 @@ FPS navigation
 
 Right now, the addon auto-registers a keymap on Middle Mouse Button with some default control scheme (which is subject to change), but the control scheme can be adjusted via operator properties (see the corresponding keymap).
 
-Operator properties:
+## Operator properties:
 * Default mode - the operator would start in this mode if other mode keys are not pressed
 * Transitions - allowed transitions between modes
 * ZBrush mode - if enabled, the operator's default mode will be invoked only if there is no geometry under the mouse, or if the mouse is sufficiently close to the 3D View border
@@ -36,7 +36,7 @@ Operator properties:
 * Dolly - key(s) that switch to Dolly mode
 * Zoom - key(s) that switch to Zoom mode
 
-FPS (First Person shooter) properties:
+## FPS (First Person shooter) properties:
 * FPS forward - key(s) that move view in forward FPS direction
 * FPS back - key(s) that move view in backward FPS direction
 * FPS left - key(s) that move view in left FPS direction
@@ -48,7 +48,7 @@ FPS (First Person shooter) properties:
 * FPS horizontal (in N-panel) - if enabled, WASD keys move view in horizontal plane, and ER/QF move view in world's vertical direction
 * FPS speed (in N-panel) - speed multiplier for FPS movement
 
-N-panel ("Mouse-look navigation" sub-panel):
+## N-panel ("Mouse-look navigation" sub-panel):
 * Enabled - enables or disables the mouse-look navigation operator
 * Zoom speed - speed multiplier for zooming
 * Trackball mode - what trackball algorithm to use
@@ -62,14 +62,14 @@ N-panel ("Mouse-look navigation" sub-panel):
 * Trackball Auto-level up - if enabled, autolevelling would always try to orient view's up axis to world's up axis in trackball mode
 * Autolevel speed - speed of autolevelling (autolevelling decreases tilt view over time)
 
-Known issues/missing features:
+## Known issues/missing features:
 * Blender trackball mode doesn't actually behave like in Blender
 * "Auto Depth", "Rotate Around Selection", "Camera Parent Lock" are not yet implemented
 * Full FPS/Fly navigation
 * In quandview, clip mode is not updated
 * Suggested by moth3r: there is no option to make grid disappear when rotating the view in Ortho mode (this is actually not an issue with the addon, but a "feature" of the C++ side not controllable through UI or python API)
 
-About:
+## About:
 This add-on grew out from the ideas I had about making MMB (Middle Mouse Button) navigation in Blender more convenient for myself. These were:
 * Be able to cancel MMB rotation, with the view returning to where it was
 * Ability to move in First Person Shooter style (using WASD control scheme) while orbiting
