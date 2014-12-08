@@ -15,7 +15,7 @@ Ivan Santic (MOTH3R) - coauthor, added idea (ZBrush mode nav), beta-tester
 This add-on grew out from the ideas I had about making MMB (Middle Mouse Button) navigation in Blender more convenient for myself. These were:
 * Be able to cancel MMB rotation, with the view returning to where it was
 * Ability to move in First Person Shooter style (using WASD control scheme) while orbiting
-* Ability to freely switch between orbit/pan/dolly/zoom and be able to do it with just the mouse (e.g. MMB is orbit, MMB+LMB is zoom, MMB+ RMB is pan)
+* Ability to freely switch between orbit/pan/dolly/zoom and be able to do it with just the mouse (e.g. MMB is orbit, MMB+LMB is zoom, MMB+RMB is pan)
 * Have a 3D crosshair in MMB navigation to indicate where the orbiting origin is
 * Make it less easy to accidentally rotate view in Ortho mode
 
@@ -82,4 +82,4 @@ Right now, the addon auto-registers a keymap on Middle Mouse Button with some de
 * "Auto Depth", "Rotate Around Selection", "Camera Parent Lock" are not yet implemented
 * Full FPS/Fly navigation
 * In quandview, clip mode is not updated
-* Suggested by moth3r: there is no option to make grid disappear when rotating the view in Ortho mode (this is actually not an issue with the addon, but a "feature" of the C++ side not controllable through UI or python API)
+* Make grid disappear when rotating the view in Ortho mode (maybe related to the previous point)
