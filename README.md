@@ -79,6 +79,7 @@ Right now, the addon auto-registers a keymap on Middle Mouse Button with some de
 
 ## Known issues/missing features:
 * Blender trackball mode doesn't actually behave like in Blender
+* Matching default rotation speed of Blender
 * "Auto Depth", "Rotate Around Selection", "Camera Parent Lock", "Auto Perspective" are not yet implemented
 * Full FPS/Fly navigation
 * In quandview, clip mode is not updated
