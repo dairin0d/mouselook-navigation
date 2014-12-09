@@ -45,6 +45,8 @@ Right now, the addon auto-registers a keymap on Middle Mouse Button with some de
 * Confirm - key(s) that confirm changes to view
 * Cancel - key(s) that cancel changes to view
 * Rotation Mode Switch - key(s) that confirm switch between Turntable and Trackball rotation modes
+* Origin: Mouse - key(s) that force Auto Depth option for the duration of the operator
+* Origin: Selection - key(s) that force Rotate Around Selection option for the duration of the operator
 * Orbit - key(s) that switch to Orbit mode
 * Orbit Snap - key(s) that switch rotation snapping
 * Pan - key(s) that switch to Pan mode
@@ -79,8 +81,9 @@ Right now, the addon auto-registers a keymap on Middle Mouse Button with some de
 
 ## Known issues/missing features:
 * Blender trackball mode doesn't actually behave like in Blender
+* Ortho-grid/quadview-clip/projection-name display is not updated
+* Auto Depth for Ortho mode (don't know how to calculate correct position from zbuf in ortho mode)
+* Rotate Around Selection (needs selection center calculation, can be in principle done in python)
 * Matching default rotation speed of Blender
-* "Auto Depth", "Rotate Around Selection", "Camera Parent Lock", "Auto Perspective" are not yet implemented
-* Full FPS/Fly navigation
-* In quandview, clip mode is not updated
-* Make grid disappear when rotating the view in Ortho mode (maybe related to the previous point)
+* Full FPS/Fly modes (see also Dalai Felinto's "Unreal" navigation?)
+* Due to the use of timer, operator consumes more resources than Blender's default
