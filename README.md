@@ -8,7 +8,8 @@ Ivan Santic (MOTH3R) - coauthor, added idea (ZBrush mode nav), beta-tester
 
 ## Description
 
-3D-Mouse-look navigation simplifies 3D view navigation inside Blender by utilizing a couple of features like ZBrush type of navigation and FPS mode. You can also customize most of the options yourself. Some of the options are avalible through N-panel as well.
+The addon attempts to provide better usability and customization of basic 3D viewport navigation (in particular, ZBrush mode and FPS-like movement).
+Still highly unpolished and a work-in-progress, but should be suitable for the evaluation of its design ideas.
 
 ## About:
 
