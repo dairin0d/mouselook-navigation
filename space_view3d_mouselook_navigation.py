@@ -21,7 +21,7 @@ bl_info = {
     "name": "Mouselook Navigation",
     "description": "Integrated 3D view navigation",
     "author": "dairin0d",
-    "version": (0, 3, 0),
+    "version": (0, 5, 0),
     "blender": (2, 7, 0),
     "location": "View3D > MMB/Scrollwheel",
     "warning": "",
@@ -34,7 +34,7 @@ bl_info = {
 import bpy
 import bgl
 
-from mathutils import Vector, Matrix, Quaternion, Euler
+from mathutils import Color, Vector, Matrix, Quaternion, Euler
 
 from bpy_extras.view3d_utils import (region_2d_to_location_3d,
                                      location_3d_to_region_2d,
@@ -45,120 +45,22 @@ from bpy_extras.view3d_utils import (region_2d_to_location_3d,
 import math
 import time
 
-# Middle mouse short click = exit on second click
-# Middle mouse drag = exit on release (smart toggle)
-# Middle mouse on raycastable surface ("Auto Depth") = orbit around it
-# ("Zoom To Mouse Position")
-# ("Rotate Around The Selection")
-# ESC = cancel & return to previous orientation
-# WS AD RF | P: L" IK | UpDown LeftRight PgupPgdown = navigation, fps-style
-# Q | { = switch Camera/Gravity coordsystem
-# Space = switch ortho/perspective (or LMB/RMB?)
-# Left|Right mouse = switch turntable/FPS mode (or Space?)
-#    (is there a need for a "trackball" mode?)
-# Hold LMB/RMB = pan?
-# Shift = pan (move in the camera plane) (a [smart] toggle?)
-# Ctrl = move closer to/farther from the orbiting point
-# Alt = discrete rotation/movement
-# ??? = navigate faster/slower?
-# ??? = show/hide crosshair?
-
 """
-Aside from cursor/object lock, there are following "rotate around" options:
-* orbiting point (crosshair)
-* camera origin (FPS mode)
-* selection (manipulator location)
-* raycasted point on surface
-* active/specific object/element location
-* cursor
-
-User may or may not want the camera to center on that point.
-
-Zoom options:
-* zoom to orbit point
-** zoom to mouse (orbit point just shifts accordingly)
-* zoom to current point
-* zoom the orbit point to/away from camera
-
-Maybe like this?
-Ctrl+scrollwheel = zoom to mouse
-Ctrl+MMB = rotate around raycasted point
-MMB+Ctrl = zoom to/from orbit point
-
+TODO:
+* Zoom to mouse position (use_zoom_to_mouse)
+* match Blender's speed
+* move mode stack functionality into a separate class
+* FPS/Fly modes (what about "Unreal"?)
+* Rotate Around Selection (needs selection center calculation, can be in principle done in python)
+* Auto Depth for Ortho mode (how to calculate correct position from zbuf in ortho mode?)
+* Note: due to the use of timer, operator consumes more resources than Blender's default
+* Blender's trackball
+* ortho-grid/quadview-clip/projection-name display is not updated
 """
-
-# also:
-# lock to cursor/object
-# emulate middle button? (Alt+LMB) (may be automatic)
-# invert zoom wheel direction? (may be automatic)
-# continuous grab (can be handy for the implementation)?
-# double click time (can be handy for the implementation)?
-# orbit style
-# zoom style
-
-# shift+scrollwheel = move Z
-# shift+scrollwheel = move Y
-# in fly mode ortho auto-switches to perspective
-#   (can be replaced by discrete movement, e.g. shift+alt)
-
-# space_data.region_3d : 3D region in this space, in case of quad view the camera region
-# space_data.region_quadviews : 3D regions (the third one defines quad view settings, the forth one is same as ‘region_3d’)
-
-"""
-class SpaceRegionView3D_Wrapper:
-    def __init__(self, region, space_data, region_data):
-        self.region = region # expected type: Region
-        self.space_data = space_data # expected type: SpaceView3D
-        self.region_data = region_data # expected type: RegionView3D
-    
-    # === SpaceView3D === #
-    @property
-    def local_view(self):
-        return self.space_data.local_view
-    @local_view.setter
-    def local_view(self, value):
-        self.space_data.local_view = value
-    
-    @property
-    def pivot_point(self):
-        return self.space_data.pivot_point
-    @pivot_point.setter
-    def pivot_point(self, value):
-        self.space_data.pivot_point = value
-    
-    @property
-    def transform_orientation(self):
-        return self.space_data.transform_orientation
-    @transform_orientation.setter
-    def transform_orientation(self, value):
-        self.space_data.transform_orientation = value
-    
-    @property
-    def grid_scale(self):
-        return self.space_data.grid_scale
-    @grid_scale.setter
-    def grid_scale(self, value):
-        self.space_data.grid_scale = value
-    
-    # === RegionView3D === #
-    @property
-    def perspective_matrix(self):
-        return self.region_data.perspective_matrix
-    
-    @property
-    def view_matrix(self):
-        return self.region_data.view_matrix
-    @view_matrix.setter
-    def view_matrix(self, value):
-        self.region_data.view_matrix = value
-    
-    def update(self):
-        self.region_data.update()
-"""
-
 
 class SmartView3D:
     def __init__(self, region, space_data, region_data):
+        self.userprefs = bpy.context.user_preferences
         self.region = region # expected type: Region
         self.space_data = space_data # expected type: SpaceView3D
         self.region_data = region_data # expected type: RegionView3D
@@ -203,6 +105,12 @@ class SmartView3D:
     def __set(self, value):
         self.space_data.lock_camera = value
     lock_camera = property(__get, __set)
+    
+    def __get(self):
+        return self.userprefs.view.use_camera_lock_parent
+    def __set(self, value):
+        self.userprefs.view.use_camera_lock_parent = value
+    lock_camera_parent = property(__get, __set)
     
     def __get(self):
         return self.space_data.region_3d
@@ -380,12 +288,32 @@ class SmartView3D:
         else:
             return self.raw_distance
     def __set(self, value):
+        value = max(value, 1e-12) # just to be sure that it's never zero or negative
         if self.is_camera and (self.camera.type == 'CAMERA') and (self.camera.data.type == 'ORTHO'):
             if self.lock_camera:
                 self.camera.data.ortho_scale = value
         else:
             self.raw_distance = value
     distance = property(__get, __set)
+    
+    def __set_cam_matrix(self, m):
+        cam = self.space_data.camera
+        max_parent = None
+        
+        if self.lock_camera_parent:
+            max_parent = cam.parent
+            if max_parent is not None:
+                while max_parent.parent is not None:
+                    max_parent = max_parent.parent
+                if max_parent.parent_type == 'VERTEX':
+                    max_parent = None # to avoid glitchiness
+        
+        if max_parent:
+            cm_inv = cam.matrix_world.inverted_safe()
+            pm = cm_inv * max_parent.matrix_world
+            max_parent.matrix_world = m * pm
+        else:
+            cam.matrix_world = m
     
     def __get(self):
         v3d = self.space_data
@@ -409,8 +337,9 @@ class SmartView3D:
         rv3d = self.region_data
         if self.is_camera:
             if self.lock_camera:
-                m = v3d.camera.matrix_world
+                m = v3d.camera.matrix_world.copy()
                 m.translation = value - self.forward * rv3d.view_distance
+                self.__set_cam_matrix(m)
         elif v3d.lock_object:
             pass
         elif v3d.lock_cursor:
@@ -440,13 +369,11 @@ class SmartView3D:
             if not self.use_camera_axes:
                 value = value * Quaternion((1, 0, 0), math.pi*0.5)
             if self.lock_camera:
-                #m = v3d.camera.matrix_world
-                #focus = m.translation + self.forward * rv3d.view_distance
                 LRS = v3d.camera.matrix_world.decompose()
                 m = MatrixLRS(LRS[0], value, LRS[2])
                 forward = -m.col[2].to_3d().normalized() # in camera axes, forward is -Z
                 m.translation = self.focus - forward * rv3d.view_distance
-                v3d.camera.matrix_world = m
+                self.__set_cam_matrix(m)
         else:
             self.raw_rotation = value
     rotation = property(__get, __set)
@@ -579,7 +506,10 @@ class SmartView3D:
     def zbuf_to_depth(self, zbuf):
         near = self.clip_start
         far = self.clip_end
-        return (far * near) / (zbuf * (far - near) - far)
+        if self.is_perspective:
+            return abs((far * near) / (zbuf * (far - near) - far))
+        else:
+            return abs(zbuf * (far - near) - far)
     
     def depth(self, xy, region_coords=True):
         if region_coords: # convert to window coords
@@ -639,41 +569,6 @@ def trackball(p1x, p1y, p2x, p2y, TRACKBALLSIZE=1.0):
     phi = 2.0 * t # how much to rotate about axis
     
     return Quaternion(a, phi)
-    #"""
-    
-    '''
-    #float phi, si, q1[4], dvec[3], newvec[3];
-    
-    newvec = Vector((p2x, p2y, -tb_project_to_sphere(TRACKBALLSIZE, p2x, p2y))
-    #calctrackballvec(&vod->ar->winrct, x, y, newvec);
-    
-    dvec = newvec - vod->trackvec
-    #sub_v3_v3v3(dvec, newvec, vod->trackvec);
-    
-    si = dvec.magnitude / (2.0 * TRACKBALLSIZE)
-    
-    a = vod->trackvec.cross(newvec)
-    #cross_v3_v3v3(q1 + 1, vod->trackvec, newvec);
-    a.normalize()
-    #normalize_v3(q1 + 1);
-    
-    # Allow for rotation beyond the interval [-pi, pi]
-    while (si > 1.0):
-        si -= 2.0
-    
-    # This relation is used instead of
-    # - phi = asin(si) so that the angle
-    # - of rotation is linearly proportional
-    # - to the distance that the mouse is
-    # - dragged.
-    phi = si * (math.pi / 2.0)
-    
-    return Quaternion(a, phi)
-    #q1[0] = math.cos(phi)
-    #mul_v3_fl(q1 + 1, math.sin(phi))
-    #mul_qt_qtqt(vod->viewquat, q1, vod->oldquat);
-    '''
-
 
 # Project an x,y pair onto a sphere of radius r OR a hyperbolic sheet
 # if we are away from the center of the sphere.
@@ -803,6 +698,8 @@ class MouselookNavigation(bpy.types.Operator):
     str_keys_confirm = _keyprop("Confirm", "Ret, Numpad Enter")
     str_keys_cancel = _keyprop("Cancel", "Esc")
     str_keys_rotmode_switch = _keyprop("Rotation Mode Switch", "Tab: Press")
+    str_keys_origin_mouse = _keyprop("Origin: Mouse", "")
+    str_keys_origin_selection = _keyprop("Origin: Selection", "")
     str_keys_orbit = _keyprop("Orbit", "") # main operator key (MMB) by default
     str_keys_orbit_snap = _keyprop("Orbit Snap", "Shift")
     #str_keys_pan = _keyprop("Pan", "Right Mouse, Shift")
@@ -826,6 +723,8 @@ class MouselookNavigation(bpy.types.Operator):
         self.keys_confirm = self.km.keychecker(self.str_keys_confirm)
         self.keys_cancel = self.km.keychecker(self.str_keys_cancel)
         self.keys_rotmode_switch = self.km.keychecker(self.str_keys_rotmode_switch)
+        self.keys_origin_mouse = self.km.keychecker(self.str_keys_origin_mouse)
+        self.keys_origin_selection = self.km.keychecker(self.str_keys_origin_selection)
         self.keys_orbit = self.km.keychecker(self.str_keys_orbit)
         self.keys_orbit_snap = self.km.keychecker(self.str_keys_orbit_snap)
         self.keys_pan = self.km.keychecker(self.str_keys_pan)
@@ -873,6 +772,8 @@ class MouselookNavigation(bpy.types.Operator):
         rotate_method = userprefs.inputs.view_rotate_method
         invert_mouse_zoom = userprefs.inputs.invert_mouse_zoom
         use_auto_perspective = userprefs.view.use_auto_perspective
+        
+        use_auto_perspective &= self.rotation_snap_autoperspective
         
         self.km.update(event)
         mouse_prev = Vector((event.mouse_prev_x, event.mouse_prev_y))
@@ -923,20 +824,20 @@ class MouselookNavigation(bpy.types.Operator):
         if not self.sv.is_perspective:
             if mode == 'DOLLY':
                 mode = 'ZOOM'
-            
+        
+        if self.explicit_orbit_origin is not None:
+            m_ofs = self.sv.matrix
+            m_ofs.translation = self.explicit_orbit_origin
+            m_ofs_inv = m_ofs.inverted_safe()
+        
+        if not self.sv.is_perspective:
             # The goal is to make it easy to pan view without accidentally rotating it
             if self.ortho_unrotate:
                 if mode in ('PAN', 'DOLLY', 'ZOOM'):
                     # forbid transitions back to orbit
                     self.allowed_transitions = self.allowed_transitions.difference(
                         {'ORBIT:PAN', 'ORBIT:DOLLY', 'ORBIT:ZOOM'})
-                    # snap to original orientation
-                    self.rot = self.rot0.copy()
-                    self.euler = self.euler0.copy()
-                    if rotate_method == 'TURNTABLE':
-                        self.sv.turntable_euler = self.euler # for turntable
-                    else:
-                        self.sv.rotation = self.rot # for trackball
+                    self.reset_rotation(rotate_method)
         
         if (event.type == 'MOUSEMOVE') or (event.type == 'INBETWEEN_MOUSEMOVE'):
             #zbuf = self.sv.read_zbuffer(mouse)[0]
@@ -948,10 +849,11 @@ class MouselookNavigation(bpy.types.Operator):
                     self.change_euler(mouse_delta.y * speed_euler.y, mouse_delta.x * speed_euler.x, 0)
                 else: # 'TRACKBALL'
                     self.change_rot_mouse(mouse_delta, mouse, speed_rot)
+                
+                if use_auto_perspective:
+                    self.sv.is_perspective = not is_orbit_snap
+                
                 if is_orbit_snap:
-                    if self.rotation_snap_autoperspective and use_auto_perspective:
-                        print(self.sv.is_perspective)
-                        self.sv.is_perspective = False
                     self.snap_rotation(self.rotation_snap_subdivs)
             elif mode == 'PAN':
                 self.change_pos_mouse(mouse_delta, False)
@@ -961,7 +863,7 @@ class MouselookNavigation(bpy.types.Operator):
                 self.change_distance((mouse_delta.y - mouse_delta.x) * speed_zoom)
         
         if event.type.startswith('TIMER'):
-            if speed_autolevel > 0: #rotate_method == 'TURNTABLE':
+            if speed_autolevel > 0:
                 if (mode != 'ORBIT') or (not is_orbit_snap):
                     if rotate_method == 'TURNTABLE':
                         self.change_euler(0, 0, speed_autolevel, False)
@@ -976,11 +878,16 @@ class MouselookNavigation(bpy.types.Operator):
                 self.change_pos(fps_speed.x, fps_speed.y, fps_speed.z, speed_move)
             
             #txt = "{} {} {} {}".format(event.type, move_x, move_y, move_z)
-            #context.area.header_text_set("%s" % (str(self.pos)))
             #context.area.header_text_set(txt)
-            #print(txt)
             
             context.area.tag_redraw()
+        
+        if self.explicit_orbit_origin is not None:
+            pre_rotate_focus = m_ofs_inv * self.pos
+            m_ofs = self.sv.matrix
+            m_ofs.translation = self.explicit_orbit_origin
+            self.pos = m_ofs * pre_rotate_focus
+            self.sv.focus = self.pos
         
         if confirm:
             self.cleanup(context)
@@ -1017,7 +924,8 @@ class MouselookNavigation(bpy.types.Operator):
     
     def change_pos(self, dx, dy, dz, speed=1.0):
         xdir, ydir, zdir = self.sv.right, self.sv.forward, self.sv.up
-        if (self.rotate_method == 'TURNTABLE') and self.fps_horizontal:
+        fps_horizontal = self.fps_horizontal and self.sv.is_perspective
+        if (self.rotate_method == 'TURNTABLE') and fps_horizontal:
             ysign = (-1.0 if zdir.z < 0 else 1.0)
             zdir = Vector((0, 0, 1))
             ydir = Quaternion(zdir, self.euler.z) * Vector((0, 1, 0))
@@ -1041,6 +949,14 @@ class MouselookNavigation(bpy.types.Operator):
             pd_y = pd.dot(self.sv.up)
             pd = (self.sv.right * pd_x) + (self.sv.forward * pd_y)
         return pd
+    
+    def reset_rotation(self, rotate_method):
+        self.rot = self.rot0.copy()
+        self.euler = self.euler0.copy()
+        if rotate_method == 'TURNTABLE':
+            self.sv.turntable_euler = self.euler # for turntable
+        else:
+            self.sv.rotation = self.rot # for trackball
     
     def snap_rotation(self, n=1):
         grid = math.pi*0.5 / n
@@ -1078,6 +994,7 @@ class MouselookNavigation(bpy.types.Operator):
             axis = self.sv.matrix.to_3x3() * axis
             self.rot = Quaternion(axis, mouse_delta.magnitude) * self.rot
         else:
+            # Glitchy/buggy. Consult with Dalai Felinto?
             region = self.sv.region
             mouse -= Vector((region.x, region.y))
             halfsize = Vector((region.width, region.height))*0.5
@@ -1086,74 +1003,11 @@ class MouselookNavigation(bpy.types.Operator):
             p1 = Vector((p1.x/halfsize.x, p1.y/halfsize.y))
             p2 = Vector((p2.x/halfsize.x, p2.y/halfsize.y))
             q = trackball(p1.x, p1.y, p2.x, p2.y, 1.1)
-            
-            """
-            TRACKBALLSIZE = 1.1
-            #region = self.sv.region
-            #halfsize = Vector((region.width, region.height))*0.5
-            
-            pmouse = mouse - mouse_delta
-            px = (halfsize.x - pmouse.x) / (region.width / 4)
-            py = (halfsize.y - pmouse.y) / (region.height / 2)
-            #vod_trackvec = Vector((px, py, -tb_project_to_sphere(TRACKBALLSIZE, px, py)))
-            vod_trackvec = Vector((px, -tb_project_to_sphere(TRACKBALLSIZE, px, py), py))
-            #vod_trackvec = self.vod_trackvec
-            
-            #x = BLI_rcti_cent_x(rect) - mx;
-            #x /= (float)(BLI_rcti_size_x(rect) / 4);
-            #y = BLI_rcti_cent_y(rect) - my;
-            #y /= (float)(BLI_rcti_size_y(rect) / 2);
-            
-            x = (halfsize.x - mouse.x) / (region.width / 4)
-            y = (halfsize.y - mouse.y) / (region.height / 2)
-            
-            #float phi, si, q1[4], dvec[3], newvec[3];
-            
-            #newvec = Vector((x, y, -tb_project_to_sphere(TRACKBALLSIZE, x, y)))
-            newvec = Vector((x, -tb_project_to_sphere(TRACKBALLSIZE, x, y), y))
-            #calctrackballvec(&vod->ar->winrct, x, y, newvec);
-            
-            dvec = newvec - vod_trackvec
-            #sub_v3_v3v3(dvec, newvec, vod->trackvec);
-            
-            si = dvec.magnitude / (2.0 * TRACKBALLSIZE)
-            
-            a = vod_trackvec.cross(newvec)
-            #cross_v3_v3v3(q1 + 1, vod->trackvec, newvec);
-            a.normalize()
-            #normalize_v3(q1 + 1);
-            
-            # Allow for rotation beyond the interval [-pi, pi]
-            while (si > 1.0):
-                si -= 2.0
-            
-            # This relation is used instead of
-            # - phi = asin(si) so that the angle
-            # - of rotation is linearly proportional
-            # - to the distance that the mouse is
-            # - dragged.
-            phi = si * (math.pi / 2.0)
-            
-            #q = Quaternion(a, phi)
-            #q1[0] = math.cos(phi)
-            #mul_v3_fl(q1 + 1, math.sin(phi))
-            #mul_qt_qtqt(vod->viewquat, q1, vod->oldquat);
-            
-            #vod_trackvec.y = 0
-            #newvec.y = 0
-            
-            vod_trackvec.normalize()
-            newvec.normalize()
-            #print("{} -> {}".format(vod_trackvec, newvec))
-            #q = vod_trackvec.rotation_difference(newvec)
-            q = newvec.rotation_difference(vod_trackvec)
-            """
-            
             axis, angle = q.to_axis_angle()
-            #print("q: {}, {}".format(axis, angle))
             axis = self.sv.matrix.to_3x3() * axis
             q = Quaternion(axis, angle * speed_rot*200)
             self.rot = q * self.rot
+        self.rot.normalize()
         self.sv.rotation = self.rot # update other representation
         self.euler = self.sv.turntable_euler # update other representation
     
@@ -1228,35 +1082,46 @@ class MouselookNavigation(bpy.types.Operator):
         region_size = Vector((region.width, region.height))
         
         self.km = InputKeyMonitor(event)
+        self.create_keycheckers(event)
         mouse_prev = Vector((event.mouse_prev_x, event.mouse_prev_y))
         mouse = Vector((event.mouse_x, event.mouse_y))
         mouse_delta = mouse - mouse_prev
         mouse_region = mouse - region_pos
         
         self.sv = SmartView3D(context.region, context.space_data, context.region_data)
+        
         zbuf = self.sv.read_zbuffer(mouse)[0]
         zcam = self.sv.zbuf_to_depth(zbuf)
         ray_data = self.sv.ray(mouse_region)
         raycast_result = context.scene.ray_cast(ray_data[0], ray_data[1])
         
-        self.create_keycheckers(event)
+        use_origin_mouse = userprefs.view.use_mouse_depth_navigate
+        use_origin_selection = userprefs.view.use_rotate_around_active
+        if self.keys_origin_selection():
+            use_origin_selection = True
+            use_origin_mouse = False
+        elif self.keys_origin_mouse():
+            use_origin_selection = False
+            use_origin_mouse = True
         
-        
-        TRACKBALLSIZE = 1.1
-        region = self.sv.region
-        halfsize = Vector((region.width, region.height))*0.5
-        
-        x = (halfsize.x - mouse.x) / (region.width / 4)
-        y = (halfsize.y - mouse.y) / (region.height / 2)
-        self.vod_trackvec = Vector((x, y, -tb_project_to_sphere(TRACKBALLSIZE, x, y)))
-        
-        
-        
-        #if rv3d.view_perspective == 'CAMERA':
-        #    rv3d.view_perspective = 'PERSP'
+        self.explicit_orbit_origin = None
+        if use_origin_selection:
+            pass # TODO (needs calculation of selection center for different modes)
+        elif use_origin_mouse:
+            # In Ortho mode it seems that near/far values do not correspond to
+            # the actual rendering range, so zcam gives wrong results there.
+            if (zbuf < 1.0) and self.sv.is_perspective:
+                self.explicit_orbit_origin = self.sv.unproject(mouse_region, zcam)
+                if self.sv.is_perspective:
+                    # Blender adjusts distance so that focus and z-point lie in the same plane
+                    viewpoint = self.sv.viewpoint
+                    self.sv.distance = zcam
+                    self.sv.viewpoint = viewpoint
+            else:
+                self.explicit_orbit_origin = self.sv.unproject(mouse_region)
         
         self.mode = 'NONE'
-        self.modes_stack = []
+        self.modes_stack = [self.default_mode] # default mode should always be in the stack!
         self.mode_keys = {'ORBIT':self.keys_orbit, 'PAN':self.keys_pan, 'DOLLY':self.keys_dolly, 'ZOOM':self.keys_zoom}
         self.mode_prev_state = {'ORBIT':False, 'PAN':False, 'DOLLY':False, 'ZOOM':False}
         self.detect_mode_changes()
@@ -1272,7 +1137,6 @@ class MouselookNavigation(bpy.types.Operator):
                 if is_over_obj and (wrk_pos > self.calc_zbrush_border()):
                     return {'PASS_THROUGH'}
             self.mode = self.default_mode
-            self.modes_stack = [self.mode]
         
         self.fps_horizontal = wm.mouselook_navigation_runtime_settings.fps_horizontal
         self.trackball_mode = wm.mouselook_navigation_runtime_settings.trackball_mode
@@ -1287,11 +1151,6 @@ class MouselookNavigation(bpy.types.Operator):
         
         self.prev_orbit_snap = False
         self.min_distance = 2 ** -10
-        self.dolly_mode = True # make this a user preference
-        self.threshold_reached = False
-        self.prev_pan_dolly = None
-        self.not_pan_dolly_yet = True
-        self.pan_dolly_snaps_back = False
         
         self._clock0 = time.clock()
         self._continuous0 = userprefs.inputs.use_mouse_continuous
@@ -1347,14 +1206,22 @@ class MouselookNavigation(bpy.types.Operator):
     
     def unregister_handlers(self, context):
         wm = context.window_manager
-        wm.event_timer_remove(self._timer)
+        if self._timer is not None:
+            wm.event_timer_remove(self._timer)
         if self._handle_view is not None:
             bpy.types.SpaceView3D.draw_handler_remove(self._handle_view, 'WINDOW')
         if self._handle_px is not None:
             bpy.types.SpaceView3D.draw_handler_remove(self._handle_px, 'WINDOW')
 
 
-def draw_crosshair(self, context):
+def get_view_overlay_color(context):
+    userprefs = context.user_preferences
+    try:
+        return userprefs.themes[0].view_3d.view_overlay
+    except:
+        return Color((0,0,0))
+
+def draw_crosshair(self, context, use_focus):
     region = context.region
     v3d = context.space_data
     rv3d = context.region_data
@@ -1365,8 +1232,41 @@ def draw_crosshair(self, context):
     if self.sv.is_camera and not self.sv.lock_camera:
         return # camera can't be manipulated, so crosshair is meaningless here
     
-    userprefs = context.user_preferences
-    color = userprefs.themes[0].view_3d.view_overlay
+    alpha = 1.0
+    color = get_view_overlay_color(context)
+    
+    has_explicit_origin = (self.explicit_orbit_origin is not None)
+    
+    if use_focus:
+        if has_explicit_origin:
+            alpha = 0.4
+        
+        focus_proj = self.sv.project(self.sv.focus)
+        if focus_proj is None:
+            return
+        
+        region_center = Vector((region.width*0.5, region.height*0.5))
+        if (focus_proj - region_center).magnitude < 2:
+            focus_proj = region_center
+        
+        if self.sv.is_camera and (not self.sv.is_perspective): # Somewhy Blender behaves like this
+            focus_proj = region_center # in case camera has non-zero shift
+    elif has_explicit_origin:
+        alpha = 1.0
+        focus_proj = self.sv.project(self.explicit_orbit_origin)
+        if focus_proj is None:
+            return
+    else:
+        return
+    
+    focus_proj = snap_pixel_vector(focus_proj)
+    
+    l0, l1 = 16, 25
+    lines = [(Vector((0, l0)), Vector((0, l1))), (Vector((0, -l0)), Vector((0, -l1))),
+             (Vector((l0, 0)), Vector((l1, 0))), (Vector((-l0, 0)), Vector((-l1, 0)))]
+    dist = min(max(self.sv.distance, self.sv.clip_start*1.01), self.sv.clip_end*0.99)
+    lines = [(self.sv.unproject(p0 + focus_proj, dist, True),
+              self.sv.unproject(p1 + focus_proj, dist, True)) for p0, p1 in lines]
     
     depth_test_prev = gl_get(bgl.GL_DEPTH_TEST)
     depth_func_prev = gl_get(bgl.GL_DEPTH_FUNC)
@@ -1375,25 +1275,6 @@ def draw_crosshair(self, context):
     color_prev = gl_get(bgl.GL_COLOR)
     blend_prev = gl_get(bgl.GL_BLEND)
     line_width_prev = gl_get(bgl.GL_LINE_WIDTH)
-    
-    region_center = Vector((region.width*0.5, region.height*0.5))
-    focus_proj = self.sv.project(self.sv.focus)
-    if (focus_proj - region_center).magnitude < 2:
-        focus_proj = region_center
-    if self.sv.is_camera and (not self.sv.is_perspective): # Somewhy Blender behaves like this
-        focus_proj = region_center # in case camera has non-zero shift
-    focus_proj = snap_pixel_vector(focus_proj)
-    
-    alpha = 1.0
-    if self.pan_dolly_snaps_back:
-        alpha = 0.35
-    
-    l0, l1 = 16, 25
-    lines = [(Vector((0, l0)), Vector((0, l1))), (Vector((0, -l0)), Vector((0, -l1))),
-             (Vector((l0, 0)), Vector((l1, 0))), (Vector((-l0, 0)), Vector((-l1, 0)))]
-    dist = min(max(self.sv.distance, self.sv.clip_start*1.01), self.sv.clip_end*0.99)
-    lines = [(self.sv.unproject(p0 + focus_proj, dist, True),
-              self.sv.unproject(p1 + focus_proj, dist, True)) for p0, p1 in lines]
     
     gl_enable(bgl.GL_BLEND, True)
     gl_enable(bgl.GL_LINE_STIPPLE, False)
@@ -1428,7 +1309,9 @@ def draw_crosshair(self, context):
     bgl.glLineWidth(line_width_prev)
 
 def draw_callback_view(self, context):
-    draw_crosshair(self, context)
+    #draw_crosshair(self, context)
+    draw_crosshair(self, context, False)
+    draw_crosshair(self, context, True)
 
 def draw_callback_px(self, context):
     region = context.region
@@ -1443,8 +1326,7 @@ def draw_callback_px(self, context):
         gl_enable(bgl.GL_BLEND, True)
         w, h = float(region.width), float(region.height)
         border = self.calc_zbrush_border()
-        userprefs = context.user_preferences
-        color = userprefs.themes[0].view_3d.view_overlay
+        color = get_view_overlay_color(context)
         bgl.glColor4f(color[0], color[1], color[2], 0.5)
         bgl.glBegin(bgl.GL_LINE_LOOP)
         bgl.glVertex2f(border, border)
@@ -1552,12 +1434,6 @@ class VIEW3D_PT_mouselook_navigation(bpy.types.Panel):
     bl_region_type = 'UI'
     bl_label = "Mouselook Navigation"
     
-    """
-    @classmethod
-    def poll(cls, context):
-        return (context.space_data and context.active_object)
-    """
-    
     def draw(self, context):
         layout = self.layout
         wm = context.window_manager
@@ -1578,7 +1454,7 @@ class MouselookNavigationRuntimeSettings(bpy.types.PropertyGroup):
     fps_horizontal = bpy.props.BoolProperty(name="FPS horizontal", default=False)
     fps_speed_modifier = bpy.props.FloatProperty(name="FPS speed", default=1.0)
     zoom_speed_modifier = bpy.props.FloatProperty(name="Zoom speed", default=1.0)
-    trackball_mode = bpy.props.EnumProperty(items=[('BLENDER', 'Blender', 'Blender'), ('WRAPPED', 'Wrapped', 'Wrapped'), ('CENTER', 'Center', 'Center')], name="Trackball mode", default='WRAPPED')
+    trackball_mode = bpy.props.EnumProperty(items=[('BLENDER', 'Blender', 'Blender (buggy!)'), ('WRAPPED', 'Wrapped', 'Wrapped'), ('CENTER', 'Center', 'Center')], name="Trackball mode", default='WRAPPED')
     rotation_snap_subdivs = bpy.props.IntProperty(name="Orbit snap subdivs", default=1, min=1)
     rotation_snap_autoperspective = bpy.props.BoolProperty(name="Orbit snap->ortho", default=True)
     rotation_speed_modifier = bpy.props.FloatProperty(name="Rotation speed", default=1.0)
