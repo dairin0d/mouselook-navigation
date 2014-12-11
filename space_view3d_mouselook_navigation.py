@@ -21,7 +21,7 @@ bl_info = {
     "name": "Mouselook Navigation",
     "description": "Integrated 3D view navigation",
     "author": "dairin0d",
-    "version": (0, 5, 0),
+    "version": (0, 5, 3),
     "blender": (2, 7, 0),
     "location": "View3D > MMB/Scrollwheel",
     "warning": "",
@@ -47,8 +47,6 @@ import time
 
 """
 TODO:
-* Zoom to mouse position (use_zoom_to_mouse)
-* match Blender's speed
 * move mode stack functionality into a separate class
 * FPS/Fly modes (what about "Unreal"?)
 * Rotate Around Selection (needs selection center calculation, can be in principle done in python)
@@ -298,17 +296,12 @@ class SmartView3D:
     
     def __set_cam_matrix(self, m):
         cam = self.space_data.camera
-        max_parent = None
-        
         if self.lock_camera_parent:
-            max_parent = cam.parent
-            if max_parent is not None:
-                while max_parent.parent is not None:
-                    max_parent = max_parent.parent
-                if max_parent.parent_type == 'VERTEX':
-                    max_parent = None # to avoid glitchiness
-        
-        if max_parent:
+            max_parent = cam
+            while True:
+                if (max_parent.parent is None) or (max_parent.parent_type == 'VERTEX'):
+                    break # 'VERTEX' isn't a rigidbody-type transform
+                max_parent = max_parent.parent
             cm_inv = cam.matrix_world.inverted_safe()
             pm = cm_inv * max_parent.matrix_world
             max_parent.matrix_world = m * pm
@@ -771,8 +764,10 @@ class MouselookNavigation(bpy.types.Operator):
         mouse_double_click_time = userprefs.inputs.mouse_double_click_time / 1000.0
         rotate_method = userprefs.inputs.view_rotate_method
         invert_mouse_zoom = userprefs.inputs.invert_mouse_zoom
+        use_zoom_to_mouse = userprefs.view.use_zoom_to_mouse
         use_auto_perspective = userprefs.view.use_auto_perspective
         
+        use_zoom_to_mouse |= self.force_origin_mouse
         use_auto_perspective &= self.rotation_snap_autoperspective
         
         self.km.update(event)
@@ -781,12 +776,17 @@ class MouselookNavigation(bpy.types.Operator):
         mouse_offset = mouse - self.mouse0
         mouse_delta = mouse - mouse_prev
         
+        # Attempt to match Blender's default speeds
+        ZOOM_SPEED_COEF = 0.77
+        TRACKBALL_SPEED_COEF = 0.35
+        TURNTABLE_SPEED_COEF = 0.62
+        
         clock = time.clock()
         dt = 0.01
         speed_move = 2.5 * self.sv.distance * dt
-        speed_zoom = 1 * dt
-        speed_rot = 1 * dt
-        speed_euler = Vector((-1, 1)) * dt
+        speed_zoom = ZOOM_SPEED_COEF * dt
+        speed_rot = TRACKBALL_SPEED_COEF * dt
+        speed_euler = Vector((-1, 1)) * TURNTABLE_SPEED_COEF * dt
         speed_autolevel = 1 * dt
         
         if invert_mouse_zoom:
@@ -860,7 +860,7 @@ class MouselookNavigation(bpy.types.Operator):
             elif mode == 'DOLLY':
                 self.change_pos_mouse(mouse_delta, True)
             elif mode == 'ZOOM':
-                self.change_distance((mouse_delta.y - mouse_delta.x) * speed_zoom)
+                self.change_distance((mouse_delta.y - mouse_delta.x) * speed_zoom, use_zoom_to_mouse)
         
         if event.type.startswith('TIMER'):
             if speed_autolevel > 0:
@@ -873,7 +873,7 @@ class MouselookNavigation(bpy.types.Operator):
             
             if fps_speed.magnitude > 0:
                 if not self.sv.is_perspective:
-                    self.change_distance(fps_speed.y * speed_zoom*(-4))
+                    self.change_distance(fps_speed.y * speed_zoom*(-4), use_zoom_to_mouse)
                     fps_speed.y = 0
                 self.change_pos(fps_speed.x, fps_speed.y, fps_speed.z, speed_move)
             
@@ -918,9 +918,16 @@ class MouselookNavigation(bpy.types.Operator):
         
         return Vector((move_x, move_y, move_z)) * (5 ** move_speedup)
     
-    def change_distance(self, delta):
+    def change_distance(self, delta, to_explicit_origin=False):
         log_zoom = math.log(max(self.sv.distance, self.min_distance), 2)
         self.sv.distance = math.pow(2, log_zoom + delta)
+        if to_explicit_origin and (self.explicit_orbit_origin is not None):
+            dst = self.explicit_orbit_origin
+            offset = self.pos - dst
+            log_zoom = math.log(max(offset.magnitude, self.min_distance), 2)
+            offset = offset.normalized() * math.pow(2, log_zoom + delta)
+            self.pos = dst + offset
+            self.sv.focus = self.pos
     
     def change_pos(self, dx, dy, dz, speed=1.0):
         xdir, ydir, zdir = self.sv.right, self.sv.forward, self.sv.up
@@ -1095,12 +1102,14 @@ class MouselookNavigation(bpy.types.Operator):
         ray_data = self.sv.ray(mouse_region)
         raycast_result = context.scene.ray_cast(ray_data[0], ray_data[1])
         
+        self.force_origin_mouse = self.keys_origin_mouse()
+        self.force_origin_selection = self.keys_origin_selection()
         use_origin_mouse = userprefs.view.use_mouse_depth_navigate
         use_origin_selection = userprefs.view.use_rotate_around_active
-        if self.keys_origin_selection():
+        if self.force_origin_selection:
             use_origin_selection = True
             use_origin_mouse = False
-        elif self.keys_origin_mouse():
+        elif self.force_origin_mouse:
             use_origin_selection = False
             use_origin_mouse = True
         
