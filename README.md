@@ -83,9 +83,7 @@ Right now, the addon auto-registers a keymap on Middle Mouse Button with some de
 ## Known issues/missing features:
 * Blender trackball mode doesn't actually behave like in Blender
 * Ortho-grid/quadview-clip/projection-name display is not updated
-* Zoom to mouse position: not yet implemented
 * Auto Depth for Ortho mode (don't know how to calculate correct position from zbuf in ortho mode)
 * Rotate Around Selection (needs selection center calculation, can be in principle done in python)
-* Matching default rotation speed of Blender
 * Full FPS/Fly modes (see also Dalai Felinto's "Unreal" navigation?)
 * Due to the use of timer, operator consumes more resources than Blender's default
