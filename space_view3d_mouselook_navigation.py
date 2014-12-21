@@ -21,7 +21,7 @@ bl_info = {
     "name": "Mouselook Navigation",
     "description": "Integrated 3D view navigation",
     "author": "dairin0d",
-    "version": (0, 9, 0),
+    "version": (0, 9, 1),
     "blender": (2, 7, 0),
     "location": "View3D > MMB/Scrollwheel",
     "warning": "",
@@ -1522,8 +1522,8 @@ class MouselookNavigation(bpy.types.Operator):
         return Vector((xy.x, -z, xy.y)).normalized(), x_neg, y_neg
     
     def calc_zbrush_border(self):
-        region = self.sv.region
-        wrk_sz = min(region.width, region.height)
+        region_free_size = self.region_free[1]
+        wrk_sz = min(region_free_size.x, region_free_size.y)
         return max(wrk_sz*0.05, 16)
     
     def invoke(self, context, event):
@@ -1532,6 +1532,25 @@ class MouselookNavigation(bpy.types.Operator):
         region = context.region
         v3d = context.space_data
         rv3d = context.region_data
+        
+        rx0 = region.x
+        rx1 = rx0 + region.width
+        ry0 = region.y
+        ry1 = ry0 + region.height
+        for rgn in context.area.regions:
+            if rgn.type == 'WINDOW':
+                continue
+            x0 = rgn.x
+            x1 = x0 + rgn.width
+            y0 = rgn.y
+            y1 = y0 + rgn.height
+            if rgn.type == 'TOOLS':
+                rx0 = x1
+            elif rgn.type == 'UI':
+                rx1 = x0
+        self.region_free = (Vector((rx0, ry0)), Vector((rx1-rx0, ry1-ry0)))
+        region_free_pos = self.region_free[0]
+        region_free_size = self.region_free[1]
         
         region_pos = Vector((region.x, region.y))
         region_size = Vector((region.width, region.height))
@@ -1542,6 +1561,7 @@ class MouselookNavigation(bpy.types.Operator):
         mouse = Vector((event.mouse_x, event.mouse_y))
         mouse_delta = mouse - mouse_prev
         mouse_region = mouse - region_pos
+        mouse_region_free = mouse - region_free_pos
         
         self.sv = SmartView3D(context.region, context.space_data, context.region_data)
         
@@ -1585,9 +1605,9 @@ class MouselookNavigation(bpy.types.Operator):
                 # In Sculpt mode, zbuffer seems to be cleared!
                 # Also, zbuf can be written by non-geometry, which is probably not desirable
                 is_over_obj = raycast_result[0]# or (zbuf < 1.0)
-                mouse_region_11 = region_size - mouse_region
-                wrk_x = min(mouse_region.x, mouse_region_11.x)
-                wrk_y = min(mouse_region.y, mouse_region_11.y)
+                mouse_region_11 = region_free_size - mouse_region_free
+                wrk_x = min(mouse_region_free.x, mouse_region_11.x)
+                wrk_y = min(mouse_region_free.y, mouse_region_11.y)
                 wrk_pos = min(wrk_x, wrk_y)
                 if is_over_obj and (wrk_pos > self.calc_zbrush_border()):
                     return {'PASS_THROUGH'}
@@ -1806,18 +1826,24 @@ def draw_callback_px(self, context):
     if self.sv.region_data != context.region_data:
         return
     
+    region_pos = Vector((region.x, region.y))
+    region_size = Vector((region.width, region.height))
+    region_free_pos = self.region_free[0]
+    region_free_size = self.region_free[1]
+    
     if self.zbrush_mode:
         blend_prev = gl_get(bgl.GL_BLEND)
         gl_enable(bgl.GL_BLEND, True)
-        w, h = float(region.width), float(region.height)
+        x, y = region_free_pos - region_pos
+        w, h = region_free_size
         border = self.calc_zbrush_border()
         color = get_color_zbrush_border(userprefs)
         bgl.glColor4f(color[0], color[1], color[2], 0.5)
         bgl.glBegin(bgl.GL_LINE_LOOP)
-        bgl.glVertex2f(border, border)
-        bgl.glVertex2f(w-border, border)
-        bgl.glVertex2f(w-border, h-border)
-        bgl.glVertex2f(border, h-border)
+        bgl.glVertex2f(x + border, y + border)
+        bgl.glVertex2f(x + w-border, y + border)
+        bgl.glVertex2f(x + w-border, y + h-border)
+        bgl.glVertex2f(x + border, y + h-border)
         bgl.glEnd()
         gl_enable(bgl.GL_BLEND, blend_prev)
 
