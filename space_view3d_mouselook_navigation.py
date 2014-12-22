@@ -21,7 +21,7 @@ bl_info = {
     "name": "Mouselook Navigation",
     "description": "Integrated 3D view navigation",
     "author": "dairin0d",
-    "version": (0, 9, 1),
+    "version": (0, 9, 3),
     "blender": (2, 7, 0),
     "location": "View3D > MMB/Scrollwheel",
     "warning": "",
@@ -50,19 +50,30 @@ import time
 Note: due to the use of timer, operator consumes more resources than Blender's default
 TODO:
 * correct & stable collision detection?
-* Auto Depth for Ortho mode (how to calculate correct position from zbuf in ortho mode?)
 * Blender's trackball
 * ortho-grid/quadview-clip/projection-name display is not updated
 """
 
 class SmartView3D:
-    def __init__(self, region, space_data, region_data):
+    def __init__(self, context=None):
+        if context is None:
+            context = bpy.context
         self.userprefs = bpy.context.user_preferences
-        self.region = region # expected type: Region
-        self.space_data = space_data # expected type: SpaceView3D
-        self.region_data = region_data # expected type: RegionView3D
+        self.region = context.region # expected type: Region
+        self.space_data = context.space_data # expected type: SpaceView3D
+        self.region_data = context.region_data # expected type: RegionView3D
         self.use_camera_axes = False
         self.use_viewpoint =  False
+        
+        r = self.region
+        x0, y0, x1, y1 = r.x, r.y, r.x+r.width, r.y+r.height
+        self.region_rect = [Vector((x0, y0)), Vector((x1-x0, y1-y0))]
+        for r in context.area.regions:
+            if r.type == 'TOOLS':
+                x0 = r.x + r.width
+            elif r.type == 'UI':
+                x1 = r.x
+        self.clickable_region_rect = [Vector((x0, y0)), Vector((x1-x0, y1-y0))]
     
     def __get(self):
         return self.space_data.lock_cursor
@@ -474,30 +485,23 @@ class SmartView3D:
         if pos is None:
             pos = self.focus
         elif isinstance(pos, (int, float)):
-            pos = self.viewpoint + self.forward * pos
+            pos = self.zbuf_range[2] + self.forward * pos
         region = self.region
         rv3d = self.region_data
         return region_2d_to_location_3d(region, rv3d, xy.copy(), pos.copy())
     
     def ray(self, xy): # 0,0 means region's bottom left corner
         region = self.region
-        v3d = self.space_data
         rv3d = self.region_data
         
-        viewPos = self.viewpoint
-        viewDir = self.forward
-        
-        near = viewPos + viewDir * self.clip_start
-        far = viewPos + viewDir * self.clip_end
+        view_dir = self.forward
+        near, far, origin = self.zbuf_range
+        near = origin + view_dir * near
+        far = origin + view_dir * far
         
         a = region_2d_to_location_3d(region, rv3d, xy.copy(), near)
         b = region_2d_to_location_3d(region, rv3d, xy.copy(), far)
-        
-        # When viewed from in-scene camera, near and far
-        # planes clip geometry even in orthographic mode.
-        clip = rv3d.is_perspective or (rv3d.view_perspective == 'CAMERA')
-        
-        return a, b, clip
+        return a, b
     
     def read_zbuffer(self, xy, wh=(1, 1)): # xy is in window coordinates!
         if isinstance(wh, (int, float)):
@@ -507,20 +511,27 @@ class SmartView3D:
         x, y, w, h = int(xy[0]), int(xy[1]), int(wh[0]), int(wh[1])
         zbuf = bgl.Buffer(bgl.GL_FLOAT, [w*h])
         bgl.glReadPixels(x, y, w, h, bgl.GL_DEPTH_COMPONENT, bgl.GL_FLOAT, zbuf)
-        return zbuf.to_list()
+        return zbuf
     
     def zbuf_to_depth(self, zbuf):
-        near = self.clip_start
-        far = self.clip_end
+        near, far, origin = self.zbuf_range
+        depth_linear = zbuf*far + (1.0 - zbuf)*near
         if self.is_perspective:
-            return abs((far * near) / (zbuf * (far - near) - far))
+            return (far * near) / (zbuf*near + (1.0 - zbuf)*far)
         else:
-            return abs(zbuf * (far - near) - far)
+            return zbuf*far + (1.0 - zbuf)*near
     
     def depth(self, xy, region_coords=True):
         if region_coords: # convert to window coords
             xy = xy + Vector((self.region.x, self.region.y))
         return self.zbuf_to_depth(self.read_zbuffer(xy)[0])
+    
+    def __get(self):
+        rv3d = self.region_data
+        if rv3d.is_perspective or (rv3d.view_perspective == 'CAMERA'):
+            return (self.clip_start, self.clip_end, self.viewpoint)
+        return (-self.clip_end*0.5, self.clip_end*0.5, self.focus)
+    zbuf_range = property(__get)
     
     del __get
     del __set
@@ -1048,7 +1059,8 @@ class MouselookNavigation(bpy.types.Operator):
     @classmethod
     def poll(cls, context):
         wm = context.window_manager
-        if not wm.mouselook_navigation_runtime_settings.is_enabled:
+        settings = wm.mouselook_navigation_runtime_settings
+        if not settings.is_enabled:
             return False
         return (context.space_data.type == 'VIEW_3D')
     
@@ -1065,8 +1077,16 @@ class MouselookNavigation(bpy.types.Operator):
         v3d = context.space_data
         rv3d = context.region_data
         
-        region_pos = Vector((region.x, region.y))
-        region_size = Vector((region.width, region.height))
+        # Sometimes ZBuffer gets cleared for some reason,
+        # so we need to wait at least 1 frame to get depth
+        if self.delayed_mouse_depth is not None:
+            if self.delayed_mouse_depth[0] > 0:
+                self.process_delayed_depth()
+            else:
+                return {'RUNNING_MODAL'}
+        
+        region_pos = self.sv.region_rect[0]
+        region_size = self.sv.region_rect[1]
         
         userprefs = context.user_preferences
         drag_threshold = userprefs.inputs.drag_threshold
@@ -1521,39 +1541,56 @@ class MouselookNavigation(bpy.types.Operator):
         z = math.sqrt(1.0 - xy.length_squared)
         return Vector((xy.x, -z, xy.y)).normalized(), x_neg, y_neg
     
-    def calc_zbrush_border(self):
-        region_free_size = self.region_free[1]
-        wrk_sz = min(region_free_size.x, region_free_size.y)
-        return max(wrk_sz*0.05, 16)
+    def calc_zbrush_border(self, scale=0.05, abs_min=16):
+        clickable_region_size = self.sv.clickable_region_rect[1]
+        wrk_sz = min(clickable_region_size.x, clickable_region_size.y)
+        return max(wrk_sz*scale, abs_min)
+    
+    def process_delayed_depth(self):
+        redraws_count, mouse, mouse_region = self.delayed_mouse_depth
+        
+        zbuf = self.sv.read_zbuffer(mouse)[0]
+        zcam = self.sv.zbuf_to_depth(zbuf)
+        
+        if zbuf < 1.0:
+            self.explicit_orbit_origin = self.sv.unproject(mouse_region, zcam)
+            if self.sv.is_perspective:
+                # Blender adjusts distance so that focus and z-point lie in the same plane
+                viewpoint = self.sv.viewpoint
+                self.sv.distance = zcam
+                self.sv.viewpoint = viewpoint
+                # Update memorized values
+                self._distance0 = self.sv.distance
+                self._pos0 = self.sv.focus
+                self.pos = self._pos0.copy()
+        else:
+            self.explicit_orbit_origin = self.sv.unproject(mouse_region)
+        
+        self.delayed_mouse_depth = None
     
     def invoke(self, context, event):
         wm = context.window_manager
         userprefs = context.user_preferences
+        addon_prefs = userprefs.addons[__name__].preferences
         region = context.region
         v3d = context.space_data
         rv3d = context.region_data
         
-        rx0 = region.x
-        rx1 = rx0 + region.width
-        ry0 = region.y
-        ry1 = ry0 + region.height
-        for rgn in context.area.regions:
-            if rgn.type == 'WINDOW':
-                continue
-            x0 = rgn.x
-            x1 = x0 + rgn.width
-            y0 = rgn.y
-            y1 = y0 + rgn.height
-            if rgn.type == 'TOOLS':
-                rx0 = x1
-            elif rgn.type == 'UI':
-                rx1 = x0
-        self.region_free = (Vector((rx0, ry0)), Vector((rx1-rx0, ry1-ry0)))
-        region_free_pos = self.region_free[0]
-        region_free_size = self.region_free[1]
+        if event.value == 'RELEASE':
+            # 'ANY' is useful for click+doubleclick, but release is not intended
+            # IMPORTANT: self.bl_idname is NOT the same as class.bl_idname!
+            for kmi in KeyMapItemSearch(MouselookNavigation.bl_idname):
+                if (kmi.type == event.type) and (kmi.value == 'ANY'):
+                    return {'CANCELLED'}
         
-        region_pos = Vector((region.x, region.y))
-        region_size = Vector((region.width, region.height))
+        self.sv = SmartView3D(context)
+        
+        region_pos = self.sv.region_rect[0]
+        region_size = self.sv.region_rect[1]
+        clickable_region_pos = self.sv.clickable_region_rect[0]
+        clickable_region_size = self.sv.clickable_region_rect[1]
+        
+        self.zbrush_border = self.calc_zbrush_border()
         
         self.km = InputKeyMonitor(event)
         self.create_keycheckers(event)
@@ -1561,9 +1598,7 @@ class MouselookNavigation(bpy.types.Operator):
         mouse = Vector((event.mouse_x, event.mouse_y))
         mouse_delta = mouse - mouse_prev
         mouse_region = mouse - region_pos
-        mouse_region_free = mouse - region_free_pos
-        
-        self.sv = SmartView3D(context.region, context.space_data, context.region_data)
+        mouse_clickable_region = mouse - clickable_region_pos
         
         zbuf = self.sv.read_zbuffer(mouse)[0]
         zcam = self.sv.zbuf_to_depth(zbuf)
@@ -1581,21 +1616,13 @@ class MouselookNavigation(bpy.types.Operator):
             use_origin_selection = False
             use_origin_mouse = True
         
+        self.delayed_mouse_depth = None
         self.explicit_orbit_origin = None
         if use_origin_selection:
             self.explicit_orbit_origin = calc_selection_center(context)
         elif use_origin_mouse:
-            # In Ortho mode it seems that near/far values do not correspond to
-            # the actual rendering range, so zcam gives wrong results there.
-            if (zbuf < 1.0) and self.sv.is_perspective:
-                self.explicit_orbit_origin = self.sv.unproject(mouse_region, zcam)
-                if self.sv.is_perspective:
-                    # Blender adjusts distance so that focus and z-point lie in the same plane
-                    viewpoint = self.sv.viewpoint
-                    self.sv.distance = zcam
-                    self.sv.viewpoint = viewpoint
-            else:
-                self.explicit_orbit_origin = self.sv.unproject(mouse_region)
+            self.delayed_mouse_depth = [0, mouse, mouse_region]
+            #self.process_delayed_depth()
         
         mode_keys = {'ORBIT':self.keys_orbit, 'PAN':self.keys_pan, 'DOLLY':self.keys_dolly, 'ZOOM':self.keys_zoom, 'FLY':self.keys_fly, 'FPS':self.keys_fps}
         self.mode_stack = ModeStack(mode_keys, self.allowed_transitions, self.default_mode, 'NONE')
@@ -1605,24 +1632,41 @@ class MouselookNavigation(bpy.types.Operator):
                 # In Sculpt mode, zbuffer seems to be cleared!
                 # Also, zbuf can be written by non-geometry, which is probably not desirable
                 is_over_obj = raycast_result[0]# or (zbuf < 1.0)
-                mouse_region_11 = region_free_size - mouse_region_free
-                wrk_x = min(mouse_region_free.x, mouse_region_11.x)
-                wrk_y = min(mouse_region_free.y, mouse_region_11.y)
+                mouse_region_11 = clickable_region_size - mouse_clickable_region
+                wrk_x = min(mouse_clickable_region.x, mouse_region_11.x)
+                wrk_y = min(mouse_clickable_region.y, mouse_region_11.y)
                 wrk_pos = min(wrk_x, wrk_y)
-                if is_over_obj and (wrk_pos > self.calc_zbrush_border()):
+                if is_over_obj and (wrk_pos > self.zbrush_border):
                     return {'PASS_THROUGH'}
             self.mode_stack.mode = self.default_mode
         
-        self.fps_horizontal = wm.mouselook_navigation_runtime_settings.fps_horizontal
-        self.trackball_mode = wm.mouselook_navigation_runtime_settings.trackball_mode
-        self.fps_speed_modifier = wm.mouselook_navigation_runtime_settings.fps_speed_modifier
-        self.zoom_speed_modifier = wm.mouselook_navigation_runtime_settings.zoom_speed_modifier
-        self.rotation_snap_subdivs = wm.mouselook_navigation_runtime_settings.rotation_snap_subdivs
-        self.rotation_snap_autoperspective = wm.mouselook_navigation_runtime_settings.rotation_snap_autoperspective
-        self.rotation_speed_modifier = wm.mouselook_navigation_runtime_settings.rotation_speed_modifier
-        self.autolevel_trackball = wm.mouselook_navigation_runtime_settings.autolevel_trackball
-        self.autolevel_trackball_up = wm.mouselook_navigation_runtime_settings.autolevel_trackball_up
-        self.autolevel_speed_modifier = wm.mouselook_navigation_runtime_settings.autolevel_speed_modifier
+        if addon_prefs.use_blender_colors:
+            try:
+                view_overlay_color = userprefs.themes[0].view_3d.view_overlay
+            except:
+                view_overlay_color = Color((0,0,0))
+            self.color_crosshair_visible = view_overlay_color
+            self.color_crosshair_obscured = view_overlay_color
+            self.color_zbrush_border = view_overlay_color
+        else:
+            self.color_crosshair_visible = addon_prefs.color_crosshair_visible
+            self.color_crosshair_obscured = addon_prefs.color_crosshair_obscured
+            self.color_zbrush_border = addon_prefs.color_zbrush_border
+        self.show_crosshair = addon_prefs.show_crosshair
+        self.show_zbrush_border = addon_prefs.show_zbrush_border
+        
+        settings = wm.mouselook_navigation_runtime_settings
+        settings = addon_prefs
+        self.fps_horizontal = settings.fps_horizontal
+        self.trackball_mode = settings.trackball_mode
+        self.fps_speed_modifier = settings.fps_speed_modifier
+        self.zoom_speed_modifier = settings.zoom_speed_modifier
+        self.rotation_snap_subdivs = settings.rotation_snap_subdivs
+        self.rotation_snap_autoperspective = settings.rotation_snap_autoperspective
+        self.rotation_speed_modifier = settings.rotation_speed_modifier
+        self.autolevel_trackball = settings.autolevel_trackball
+        self.autolevel_trackball_up = settings.autolevel_trackball_up
+        self.autolevel_speed_modifier = settings.autolevel_speed_modifier
         
         self.prev_orbit_snap = False
         self.min_distance = 2 ** -10
@@ -1702,38 +1746,11 @@ class MouselookNavigation(bpy.types.Operator):
             bpy.types.SpaceView3D.draw_handler_remove(self._handle_px, 'WINDOW')
 
 
-def get_view_overlay_color(userprefs):
-    try:
-        return userprefs.themes[0].view_3d.view_overlay
-    except:
-        return Color((0,0,0))
-
-def get_color_crosshair_visible(userprefs):
-    addon_prefs = userprefs.addons[__name__].preferences
-    if addon_prefs.use_blender_colors:
-        return get_view_overlay_color(userprefs)
-    return addon_prefs.color_crosshair_visible
-
-def get_color_crosshair_obscured(userprefs):
-    addon_prefs = userprefs.addons[__name__].preferences
-    if addon_prefs.use_blender_colors:
-        return get_view_overlay_color(userprefs)
-    return addon_prefs.color_crosshair_obscured
-
-def get_color_zbrush_border(userprefs):
-    addon_prefs = userprefs.addons[__name__].preferences
-    if addon_prefs.use_blender_colors:
-        return get_view_overlay_color(userprefs)
-    return addon_prefs.color_zbrush_border
-
 def draw_crosshair(self, context, use_focus):
     userprefs = context.user_preferences
     region = context.region
     v3d = context.space_data
     rv3d = context.region_data
-    
-    if self.sv.region_data != context.region_data:
-        return
     
     if self.sv.is_camera and not self.sv.lock_camera:
         return # camera can't be manipulated, so crosshair is meaningless here
@@ -1763,10 +1780,16 @@ def draw_crosshair(self, context, use_focus):
     
     focus_proj = snap_pixel_vector(focus_proj)
     
+    near, far, origin = self.sv.zbuf_range
+    dist = (self.sv.focus - origin).magnitude
+    if self.sv.is_perspective:
+        dist = min(max(dist, near*1.01), far*0.99)
+    else:
+        dist = min(max(dist, near*0.99 + far*0.01), far*0.99 + near*0.01)
+    
     l0, l1 = 16, 25
     lines = [(Vector((0, l0)), Vector((0, l1))), (Vector((0, -l0)), Vector((0, -l1))),
              (Vector((l0, 0)), Vector((l1, 0))), (Vector((-l0, 0)), Vector((-l1, 0)))]
-    dist = min(max(self.sv.distance, self.sv.clip_start*1.01), self.sv.clip_end*0.99)
     lines = [(self.sv.unproject(p0 + focus_proj, dist, True),
               self.sv.unproject(p1 + focus_proj, dist, True)) for p0, p1 in lines]
     
@@ -1783,7 +1806,7 @@ def draw_crosshair(self, context, use_focus):
     gl_enable(bgl.GL_DEPTH_WRITEMASK, False)
     gl_enable(bgl.GL_DEPTH_TEST, True)
     
-    color = get_color_crosshair_visible(userprefs)
+    color = self.color_crosshair_visible
     bgl.glDepthFunc(bgl.GL_LEQUAL)
     bgl.glColor4f(color[0], color[1], color[2], 1.0*alpha)
     bgl.glLineWidth(1)
@@ -1793,7 +1816,7 @@ def draw_crosshair(self, context, use_focus):
         bgl.glVertex3f(p1[0], p1[1], p1[2])
     bgl.glEnd()
     
-    color = get_color_crosshair_obscured(userprefs)
+    color = self.color_crosshair_obscured
     bgl.glDepthFunc(bgl.GL_GREATER)
     bgl.glColor4f(color[0], color[1], color[2], 0.35*alpha)
     bgl.glLineWidth(3)
@@ -1813,9 +1836,17 @@ def draw_crosshair(self, context, use_focus):
     bgl.glLineWidth(line_width_prev)
 
 def draw_callback_view(self, context):
-    #draw_crosshair(self, context)
-    draw_crosshair(self, context, False)
-    draw_crosshair(self, context, True)
+    userprefs = context.user_preferences
+    region = context.region
+    v3d = context.space_data
+    rv3d = context.region_data
+    
+    if self.sv.region_data != context.region_data:
+        return
+    
+    if self.show_crosshair:
+        draw_crosshair(self, context, False)
+        draw_crosshair(self, context, True)
 
 def draw_callback_px(self, context):
     userprefs = context.user_preferences
@@ -1826,18 +1857,21 @@ def draw_callback_px(self, context):
     if self.sv.region_data != context.region_data:
         return
     
-    region_pos = Vector((region.x, region.y))
-    region_size = Vector((region.width, region.height))
-    region_free_pos = self.region_free[0]
-    region_free_size = self.region_free[1]
+    if self.delayed_mouse_depth is not None:
+        self.delayed_mouse_depth[0] += 1 # increment redraws counter
     
-    if self.zbrush_mode:
+    region_pos = self.sv.region_rect[0]
+    region_size = self.sv.region_rect[1]
+    clickable_region_pos = self.sv.clickable_region_rect[0]
+    clickable_region_size = self.sv.clickable_region_rect[1]
+    
+    if self.zbrush_mode and self.show_zbrush_border:
         blend_prev = gl_get(bgl.GL_BLEND)
         gl_enable(bgl.GL_BLEND, True)
-        x, y = region_free_pos - region_pos
-        w, h = region_free_size
-        border = self.calc_zbrush_border()
-        color = get_color_zbrush_border(userprefs)
+        x, y = clickable_region_pos - region_pos
+        w, h = clickable_region_size
+        border = self.zbrush_border
+        color = self.color_zbrush_border
         bgl.glColor4f(color[0], color[1], color[2], 0.5)
         bgl.glBegin(bgl.GL_LINE_LOOP)
         bgl.glVertex2f(x + border, y + border)
@@ -1942,53 +1976,99 @@ def unregister_keymaps():
 class VIEW3D_PT_mouselook_navigation(bpy.types.Panel):
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_label = "Mouselook Navigation"
+    bl_label = "Mouselook Nav."
     
     def draw(self, context):
         layout = self.layout
         wm = context.window_manager
-        layout.prop(wm.mouselook_navigation_runtime_settings, "is_enabled")
-        layout.prop(wm.mouselook_navigation_runtime_settings, "fps_horizontal")
-        layout.prop(wm.mouselook_navigation_runtime_settings, "fps_speed_modifier")
-        layout.prop(wm.mouselook_navigation_runtime_settings, "zoom_speed_modifier")
-        layout.prop(wm.mouselook_navigation_runtime_settings, "trackball_mode")
-        layout.prop(wm.mouselook_navigation_runtime_settings, "rotation_snap_subdivs")
-        layout.prop(wm.mouselook_navigation_runtime_settings, "rotation_snap_autoperspective")
-        layout.prop(wm.mouselook_navigation_runtime_settings, "rotation_speed_modifier")
-        layout.prop(wm.mouselook_navigation_runtime_settings, "autolevel_trackball")
-        layout.prop(wm.mouselook_navigation_runtime_settings, "autolevel_trackball_up")
-        layout.prop(wm.mouselook_navigation_runtime_settings, "autolevel_speed_modifier")
+        settings = wm.mouselook_navigation_runtime_settings
+        
+        userprefs = context.user_preferences
+        addon_prefs = userprefs.addons[__name__].preferences
+        settings = addon_prefs
+        
+        col = layout.column(True)
+        col.prop(settings, "zoom_speed_modifier")
+        col.prop(settings, "rotation_speed_modifier")
+        col.prop(settings, "fps_speed_modifier")
+        
+        layout.prop(settings, "fps_horizontal")
+        
+        box = layout.box()
+        row = box.row()
+        row.label(text="Orbit snap")
+        row.prop(settings, "rotation_snap_autoperspective", text="To Ortho", toggle=True)
+        box.prop(settings, "rotation_snap_subdivs", text="Subdivs")
+        
+        box = layout.box()
+        row = box.row()
+        row.label(text="Trackball")
+        row.prop(settings, "trackball_mode", text="")
+        row = box.row(True)
+        row.prop(settings, "autolevel_trackball", text="Autolevel", toggle=True)
+        cell = row.row(True)
+        cell.active = settings.autolevel_trackball
+        cell.prop(settings, "autolevel_trackball_up", text="Up", toggle=True)
+        
+        layout.prop(settings, "autolevel_speed_modifier")
+    
+    def draw_header(self, context):
+        layout = self.layout
+        wm = context.window_manager
+        settings = wm.mouselook_navigation_runtime_settings
+        layout.prop(settings, "is_enabled", text="")
 
 class MouselookNavigationRuntimeSettings(bpy.types.PropertyGroup):
-    is_enabled = bpy.props.BoolProperty(name="Enabled", default=True, options={'HIDDEN'})
-    fps_horizontal = bpy.props.BoolProperty(name="FPS horizontal", default=False)
-    fps_speed_modifier = bpy.props.FloatProperty(name="FPS speed", default=1.0)
-    zoom_speed_modifier = bpy.props.FloatProperty(name="Zoom speed", default=1.0)
-    trackball_mode = bpy.props.EnumProperty(items=[('BLENDER', 'Blender', 'Blender (buggy!)'), ('WRAPPED', 'Wrapped', 'Wrapped'), ('CENTER', 'Center', 'Center')], name="Trackball mode", default='WRAPPED')
-    rotation_snap_subdivs = bpy.props.IntProperty(name="Orbit snap subdivs", default=1, min=1)
-    rotation_snap_autoperspective = bpy.props.BoolProperty(name="Orbit snap->ortho", default=True)
-    rotation_speed_modifier = bpy.props.FloatProperty(name="Rotation speed", default=1.0)
-    autolevel_trackball = bpy.props.BoolProperty(name="Trackball Autolevel", default=False)
-    autolevel_trackball_up = bpy.props.BoolProperty(name="Trackball Autolevel up", default=False)
+    is_enabled = bpy.props.BoolProperty(name="Enabled", description="Enable/disable Mouselook Navigation", default=True, options={'HIDDEN'})
+    '''
+    zoom_speed_modifier = bpy.props.FloatProperty(name="Zoom speed", description="Zooming speed", default=1.0)
+    rotation_speed_modifier = bpy.props.FloatProperty(name="Rotation speed", description="Rotation speed", default=1.0)
+    fps_speed_modifier = bpy.props.FloatProperty(name="FPS speed", description="FPS movement speed", default=1.0)
+    fps_horizontal = bpy.props.BoolProperty(name="FPS horizontal", description="Force forward/backward to be in horizontal plane, and up/down to be vertical", default=False)
+    trackball_mode = bpy.props.EnumProperty(name="Trackball mode", description="Rotation algorithm used in trackball mode", default='WRAPPED', items=[('BLENDER', 'Blender', 'Blender (buggy!)'), ('WRAPPED', 'Wrapped', 'Wrapped'), ('CENTER', 'Center', 'Center')])
+    rotation_snap_subdivs = bpy.props.IntProperty(name="Orbit snap subdivs", description="Intermediate angles used when snapping (1: 90°, 2: 45°, 3: 30°, etc.)", default=1, min=1)
+    rotation_snap_autoperspective = bpy.props.BoolProperty(name="Orbit snap->ortho", description="If Auto Perspective is enabled, rotation snapping will automatically switch the view to Ortho", default=True)
+    autolevel_trackball = bpy.props.BoolProperty(name="Trackball Autolevel", description="Autolevel in Trackball mode", default=False)
+    autolevel_trackball_up = bpy.props.BoolProperty(name="Trackball Autolevel up", description="Try to autolevel 'upright' in Trackball mode", default=False)
     autolevel_speed_modifier = bpy.props.FloatProperty(name="Autolevel speed", description="Autoleveling speed", default=0.0, min=0.0)
+    '''
 
 class ThisAddonPreferences(bpy.types.AddonPreferences):
     # this must match the addon name, use '__package__'
     # when defining this in a submodule of a python package.
     bl_idname = __name__
     
+    show_crosshair = bpy.props.BoolProperty(name="Show Crosshair", default=True)
+    show_zbrush_border = bpy.props.BoolProperty(name="Show ZBrush border", default=True)
     use_blender_colors = bpy.props.BoolProperty(name="Use Blender's colors", default=True)
     color_crosshair_visible = bpy.props.FloatVectorProperty(name="Crosshair (visible)", default=(0.0, 0.0, 0.0), subtype='COLOR', min=0.0, max=1.0)
     color_crosshair_obscured = bpy.props.FloatVectorProperty(name="Crosshair (obscured)", default=(0.0, 0.0, 0.0), subtype='COLOR', min=0.0, max=1.0)
     color_zbrush_border = bpy.props.FloatVectorProperty(name="ZBrush border", default=(0.0, 0.0, 0.0), subtype='COLOR', min=0.0, max=1.0)
     
+    #is_enabled = bpy.props.BoolProperty(name="Enabled", description="Enable/disable Mouselook Navigation", default=True, options={'HIDDEN'})
+    zoom_speed_modifier = bpy.props.FloatProperty(name="Zoom speed", description="Zooming speed", default=1.0)
+    rotation_speed_modifier = bpy.props.FloatProperty(name="Rotation speed", description="Rotation speed", default=1.0)
+    fps_speed_modifier = bpy.props.FloatProperty(name="FPS speed", description="FPS movement speed", default=1.0)
+    fps_horizontal = bpy.props.BoolProperty(name="FPS horizontal", description="Force forward/backward to be in horizontal plane, and up/down to be vertical", default=False)
+    trackball_mode = bpy.props.EnumProperty(name="Trackball mode", description="Rotation algorithm used in trackball mode", default='WRAPPED', items=[('BLENDER', 'Blender', 'Blender (buggy!)'), ('WRAPPED', 'Wrapped', 'Wrapped'), ('CENTER', 'Center', 'Center')])
+    rotation_snap_subdivs = bpy.props.IntProperty(name="Orbit snap subdivs", description="Intermediate angles used when snapping (1: 90°, 2: 45°, 3: 30°, etc.)", default=1, min=1)
+    rotation_snap_autoperspective = bpy.props.BoolProperty(name="Orbit snap->ortho", description="If Auto Perspective is enabled, rotation snapping will automatically switch the view to Ortho", default=True)
+    autolevel_trackball = bpy.props.BoolProperty(name="Trackball Autolevel", description="Autolevel in Trackball mode", default=False)
+    autolevel_trackball_up = bpy.props.BoolProperty(name="Trackball Autolevel up", description="Try to autolevel 'upright' in Trackball mode", default=False)
+    autolevel_speed_modifier = bpy.props.FloatProperty(name="Autolevel speed", description="Autoleveling speed", default=0.0, min=0.0)
+    
     def draw(self, context):
         layout = self.layout
-        layout.prop(self, "use_blender_colors")
         row = layout.row()
-        row.prop(self, "color_crosshair_visible")
-        row.prop(self, "color_crosshair_obscured")
-        row.prop(self, "color_zbrush_border")
+        col = row.column()
+        col.prop(self, "use_blender_colors")
+        col.prop(self, "show_crosshair")
+        col.prop(self, "show_zbrush_border")
+        col = row.column()
+        col.active = not self.use_blender_colors
+        col.row().prop(self, "color_crosshair_visible")
+        col.row().prop(self, "color_crosshair_obscured")
+        col.row().prop(self, "color_zbrush_border")
 
 def register():
     bpy.utils.register_class(ThisAddonPreferences)
