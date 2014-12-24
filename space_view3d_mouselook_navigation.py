@@ -50,6 +50,7 @@ import time
 Note: due to the use of timer, operator consumes more resources than Blender's default
 TODO:
 * correct & stable collision detection?
+* in sculpt mode, raycast uses original (non-sculpted mesh). What is the best way around that?
 * Blender's trackball
 * ortho-grid/quadview-clip/projection-name display is not updated
 """
@@ -326,7 +327,7 @@ class SmartView3D:
                 if (max_parent.parent is None) or (max_parent.parent_type == 'VERTEX'):
                     break # 'VERTEX' isn't a rigidbody-type transform
                 max_parent = max_parent.parent
-            cm_inv = cam.matrix_world.inverted_safe()
+            cm_inv = cam.matrix_world.inverted()
             pm = cm_inv * max_parent.matrix_world
             max_parent.matrix_world = m * pm
         else:
@@ -627,7 +628,7 @@ def apply_collisions(scene, p_head, v, view_height, is_crouching, parallel, max_
     
     while max_slides >= 0:
         e2w.translation = new_center
-        w2e = e2w.inverted_safe()
+        w2e = e2w.inverted()
         
         #ray_origin = (None if parallel else p_center)
         ray_origin = (head_h-0.5 if parallel else p_head)
@@ -828,10 +829,40 @@ def calc_selection_center(context): # View3D area is assumed
     
     return sum(positions, Vector()) * (1.0 / n_positions)
 
+class ToggleObjectMode:
+    def __init__(self, mode='OBJECT'):
+        if not isinstance(mode, str):
+            mode = ('OBJECT' if mode else None)
+        
+        self.mode = mode
+    
+    def __enter__(self):
+        if self.mode:
+            edit_preferences = bpy.context.user_preferences.edit
+            
+            self.global_undo = edit_preferences.use_global_undo
+            self.prev_mode = bpy.context.object.mode
+            
+            if self.prev_mode != self.mode:
+                edit_preferences.use_global_undo = False
+                bpy.ops.object.mode_set(mode=self.mode)
+        
+        return self
+    
+    def __exit__(self, type, value, traceback):
+        if self.mode:
+            edit_preferences = bpy.context.user_preferences.edit
+            
+            if self.prev_mode != self.mode:
+                bpy.ops.object.mode_set(mode=self.prev_mode)
+                edit_preferences.use_global_undo = self.global_undo
+
 class InputKeyMonitor:
-    all_keys = {'NONE', 'LEFTMOUSE', 'MIDDLEMOUSE', 'RIGHTMOUSE', 'BUTTON4MOUSE', 'BUTTON5MOUSE', 'BUTTON6MOUSE', 'BUTTON7MOUSE', 'ACTIONMOUSE', 'SELECTMOUSE', 'MOUSEMOVE', 'INBETWEEN_MOUSEMOVE', 'TRACKPADPAN', 'TRACKPADZOOM', 'MOUSEROTATE', 'WHEELUPMOUSE', 'WHEELDOWNMOUSE', 'WHEELINMOUSE', 'WHEELOUTMOUSE', 'EVT_TWEAK_L', 'EVT_TWEAK_M', 'EVT_TWEAK_R', 'EVT_TWEAK_A', 'EVT_TWEAK_S', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', 'ZERO', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN', 'EIGHT', 'NINE', 'LEFT_CTRL', 'LEFT_ALT', 'LEFT_SHIFT', 'RIGHT_ALT', 'RIGHT_CTRL', 'RIGHT_SHIFT', 'OSKEY', 'GRLESS', 'ESC', 'TAB', 'RET', 'SPACE', 'LINE_FEED', 'BACK_SPACE', 'DEL', 'SEMI_COLON', 'PERIOD', 'COMMA', 'QUOTE', 'ACCENT_GRAVE', 'MINUS', 'SLASH', 'BACK_SLASH', 'EQUAL', 'LEFT_BRACKET', 'RIGHT_BRACKET', 'LEFT_ARROW', 'DOWN_ARROW', 'RIGHT_ARROW', 'UP_ARROW', 'NUMPAD_2', 'NUMPAD_4', 'NUMPAD_6', 'NUMPAD_8', 'NUMPAD_1', 'NUMPAD_3', 'NUMPAD_5', 'NUMPAD_7', 'NUMPAD_9', 'NUMPAD_PERIOD', 'NUMPAD_SLASH', 'NUMPAD_ASTERIX', 'NUMPAD_0', 'NUMPAD_MINUS', 'NUMPAD_ENTER', 'NUMPAD_PLUS', 'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12', 'F13', 'F14', 'F15', 'F16', 'F17', 'F18', 'F19', 'PAUSE', 'INSERT', 'HOME', 'PAGE_UP', 'PAGE_DOWN', 'END', 'MEDIA_PLAY', 'MEDIA_STOP', 'MEDIA_FIRST', 'MEDIA_LAST', 'TEXTINPUT', 'WINDOW_DEACTIVATE', 'TIMER', 'TIMER0', 'TIMER1', 'TIMER2', 'TIMER_JOBS', 'TIMER_AUTOSAVE', 'TIMER_REPORT', 'TIMERREGION', 'NDOF_MOTION', 'NDOF_BUTTON_MENU', 'NDOF_BUTTON_FIT', 'NDOF_BUTTON_TOP', 'NDOF_BUTTON_BOTTOM', 'NDOF_BUTTON_LEFT', 'NDOF_BUTTON_RIGHT', 'NDOF_BUTTON_FRONT', 'NDOF_BUTTON_BACK', 'NDOF_BUTTON_ISO1', 'NDOF_BUTTON_ISO2', 'NDOF_BUTTON_ROLL_CW', 'NDOF_BUTTON_ROLL_CCW', 'NDOF_BUTTON_SPIN_CW', 'NDOF_BUTTON_SPIN_CCW', 'NDOF_BUTTON_TILT_CW', 'NDOF_BUTTON_TILT_CCW', 'NDOF_BUTTON_ROTATE', 'NDOF_BUTTON_PANZOOM', 'NDOF_BUTTON_DOMINANT', 'NDOF_BUTTON_PLUS', 'NDOF_BUTTON_MINUS', 'NDOF_BUTTON_ESC', 'NDOF_BUTTON_ALT', 'NDOF_BUTTON_SHIFT', 'NDOF_BUTTON_CTRL', 'NDOF_BUTTON_1', 'NDOF_BUTTON_2', 'NDOF_BUTTON_3', 'NDOF_BUTTON_4', 'NDOF_BUTTON_5', 'NDOF_BUTTON_6', 'NDOF_BUTTON_7', 'NDOF_BUTTON_8', 'NDOF_BUTTON_9', 'NDOF_BUTTON_10', 'NDOF_BUTTON_A', 'NDOF_BUTTON_B', 'NDOF_BUTTON_C'}
+    #all_keys = {'NONE', 'LEFTMOUSE', 'MIDDLEMOUSE', 'RIGHTMOUSE', 'BUTTON4MOUSE', 'BUTTON5MOUSE', 'BUTTON6MOUSE', 'BUTTON7MOUSE', 'ACTIONMOUSE', 'SELECTMOUSE', 'MOUSEMOVE', 'INBETWEEN_MOUSEMOVE', 'TRACKPADPAN', 'TRACKPADZOOM', 'MOUSEROTATE', 'WHEELUPMOUSE', 'WHEELDOWNMOUSE', 'WHEELINMOUSE', 'WHEELOUTMOUSE', 'EVT_TWEAK_L', 'EVT_TWEAK_M', 'EVT_TWEAK_R', 'EVT_TWEAK_A', 'EVT_TWEAK_S', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', 'ZERO', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN', 'EIGHT', 'NINE', 'LEFT_CTRL', 'LEFT_ALT', 'LEFT_SHIFT', 'RIGHT_ALT', 'RIGHT_CTRL', 'RIGHT_SHIFT', 'OSKEY', 'GRLESS', 'ESC', 'TAB', 'RET', 'SPACE', 'LINE_FEED', 'BACK_SPACE', 'DEL', 'SEMI_COLON', 'PERIOD', 'COMMA', 'QUOTE', 'ACCENT_GRAVE', 'MINUS', 'SLASH', 'BACK_SLASH', 'EQUAL', 'LEFT_BRACKET', 'RIGHT_BRACKET', 'LEFT_ARROW', 'DOWN_ARROW', 'RIGHT_ARROW', 'UP_ARROW', 'NUMPAD_2', 'NUMPAD_4', 'NUMPAD_6', 'NUMPAD_8', 'NUMPAD_1', 'NUMPAD_3', 'NUMPAD_5', 'NUMPAD_7', 'NUMPAD_9', 'NUMPAD_PERIOD', 'NUMPAD_SLASH', 'NUMPAD_ASTERIX', 'NUMPAD_0', 'NUMPAD_MINUS', 'NUMPAD_ENTER', 'NUMPAD_PLUS', 'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12', 'F13', 'F14', 'F15', 'F16', 'F17', 'F18', 'F19', 'PAUSE', 'INSERT', 'HOME', 'PAGE_UP', 'PAGE_DOWN', 'END', 'MEDIA_PLAY', 'MEDIA_STOP', 'MEDIA_FIRST', 'MEDIA_LAST', 'TEXTINPUT', 'WINDOW_DEACTIVATE', 'TIMER', 'TIMER0', 'TIMER1', 'TIMER2', 'TIMER_JOBS', 'TIMER_AUTOSAVE', 'TIMER_REPORT', 'TIMERREGION', 'NDOF_MOTION', 'NDOF_BUTTON_MENU', 'NDOF_BUTTON_FIT', 'NDOF_BUTTON_TOP', 'NDOF_BUTTON_BOTTOM', 'NDOF_BUTTON_LEFT', 'NDOF_BUTTON_RIGHT', 'NDOF_BUTTON_FRONT', 'NDOF_BUTTON_BACK', 'NDOF_BUTTON_ISO1', 'NDOF_BUTTON_ISO2', 'NDOF_BUTTON_ROLL_CW', 'NDOF_BUTTON_ROLL_CCW', 'NDOF_BUTTON_SPIN_CW', 'NDOF_BUTTON_SPIN_CCW', 'NDOF_BUTTON_TILT_CW', 'NDOF_BUTTON_TILT_CCW', 'NDOF_BUTTON_ROTATE', 'NDOF_BUTTON_PANZOOM', 'NDOF_BUTTON_DOMINANT', 'NDOF_BUTTON_PLUS', 'NDOF_BUTTON_MINUS', 'NDOF_BUTTON_ESC', 'NDOF_BUTTON_ALT', 'NDOF_BUTTON_SHIFT', 'NDOF_BUTTON_CTRL', 'NDOF_BUTTON_1', 'NDOF_BUTTON_2', 'NDOF_BUTTON_3', 'NDOF_BUTTON_4', 'NDOF_BUTTON_5', 'NDOF_BUTTON_6', 'NDOF_BUTTON_7', 'NDOF_BUTTON_8', 'NDOF_BUTTON_9', 'NDOF_BUTTON_10', 'NDOF_BUTTON_A', 'NDOF_BUTTON_B', 'NDOF_BUTTON_C'}
+    all_keys = bpy.types.Event.bl_rna.properties["type"].enum_items.keys()
     all_modifiers = {'alt', 'ctrl', 'oskey', 'shift'}
-    all_events = {'ANY', 'NOTHING', 'PRESS', 'RELEASE', 'CLICK', 'DOUBLE_CLICK', 'NORTH', 'NORTH_EAST', 'EAST', 'SOUTH_EAST', 'SOUTH', 'SOUTH_WEST', 'WEST', 'NORTH_WEST'}
+    #all_events = {'ANY', 'NOTHING', 'PRESS', 'RELEASE', 'CLICK', 'DOUBLE_CLICK', 'NORTH', 'NORTH_EAST', 'EAST', 'SOUTH_EAST', 'SOUTH', 'SOUTH_WEST', 'WEST', 'NORTH_WEST'}
+    all_events = bpy.types.Event.bl_rna.properties["value"].enum_items.keys()
     
     def __init__(self, event=None):
         self.event = ""
@@ -1002,8 +1033,8 @@ class MouselookNavigation(bpy.types.Operator):
     
     def _keyprop(name, default_keys):
         return bpy.props.StringProperty(name=name, description=name, default=default_keys)
-    str_keys_confirm = _keyprop("Confirm", "Ret, Numpad Enter, Left Mouse")
-    str_keys_cancel = _keyprop("Cancel", "Esc, Right Mouse")
+    str_keys_confirm = _keyprop("Confirm", "Ret, Numpad Enter, Left Mouse: Press")
+    str_keys_cancel = _keyprop("Cancel", "Esc, Right Mouse: Press")
     str_keys_rotmode_switch = _keyprop("Rotation Mode Switch", "Space: Press")
     str_keys_origin_mouse = _keyprop("Origin: Mouse", "")
     str_keys_origin_selection = _keyprop("Origin: Selection", "")
@@ -1149,7 +1180,7 @@ class MouselookNavigation(bpy.types.Operator):
         if self.explicit_orbit_origin is not None:
             m_ofs = self.sv.matrix
             m_ofs.translation = self.explicit_orbit_origin
-            m_ofs_inv = m_ofs.inverted_safe()
+            m_ofs_inv = m_ofs.inverted()
         
         if (mode == 'FLY') or (mode == 'FPS'):
             if self.sv.is_region_3d or not self.sv.quadview_lock:
@@ -1973,6 +2004,180 @@ def unregister_keymaps():
     unregister_keymap_for_mode('3D View')
     #unregister_keymap_for_mode('Sculpt')
 
+def remove_all_keymaps(idname):
+    wm = bpy.context.window_manager
+    for km in wm.keyconfigs.addon.keymaps:
+        for kmi in list(km.keymap_items):
+            if kmi.idname == idname:
+                km.keymap_items.remove(kmi)
+
+def collect_keymaps_props(idname, prop_names):
+    wm = bpy.context.window_manager
+    props = {}
+    for km_name, km in wm.keyconfigs.addon.keymaps.items():
+        for kmi in list(km.keymap_items):
+            if kmi.idname == idname:
+                if kmi.active or (km_name not in props):
+                    props[km_name] = {name:getattr(kmi.properties, name) for name in prop_names}
+    return props
+
+def update_keymaps(activate=True):
+    context = bpy.context
+    wm = context.window_manager
+    userprefs = context.user_preferences
+    addon_prefs = userprefs.addons[__name__].preferences
+    
+    idname = MouselookNavigation.bl_idname
+    
+    # It seems that changes to KeyMapItem's operator properties are stored elsewhere
+    # (i.e., if the user changes some value, it wouldn't be reflected in kmi)
+    '''
+    prop_names = [
+        "default_mode",
+        "allowed_transitions",
+        "zbrush_mode",
+        "ortho_unrotate",
+        "str_keys_confirm",
+        "str_keys_cancel",
+        "str_keys_rotmode_switch",
+        "str_keys_origin_mouse",
+        "str_keys_origin_selection",
+        "str_keys_orbit",
+        "str_keys_orbit_snap",
+        "str_keys_pan",
+        "str_keys_dolly",
+        "str_keys_zoom",
+        "str_keys_fly",
+        "str_keys_fps",
+        "str_keys_FPS_forward",
+        "str_keys_FPS_back",
+        "str_keys_FPS_left",
+        "str_keys_FPS_right",
+        "str_keys_FPS_up",
+        "str_keys_FPS_down",
+        "str_keys_fps_acceleration",
+        "str_keys_fps_slowdown",
+        "str_keys_fps_crouch",
+        "str_keys_fps_jump",
+        "str_keys_fps_teleport"
+    ]
+    
+    if activate:
+        props = collect_keymaps_props(idname, prop_names)
+    '''
+    
+    remove_all_keymaps(idname)
+    
+    if activate:
+        key_monitor = InputKeyMonitor()
+        addon_keymaps = wm.keyconfigs.addon.keymaps
+        
+        if len(addon_prefs.autoreg_keymaps) == 0 and addon_prefs.use_default_keymap:
+            kmi = next(KeyMapItemSearch("view3d.rotate"), None)
+            if kmi:
+                ark = addon_prefs.autoreg_keymaps.add()
+                ark.mode_name = '3D View'
+                ark.value_type = kmi.type+":"+"ANY" #kmi.value
+                ark.any = True #kmi.any
+                ark.shift = False #kmi.shift
+                ark.ctrl = False #kmi.ctrl
+                ark.alt = False #kmi.alt
+                ark.oskey = False #kmi.oskey
+                ark.key_modifier = "" #kmi.key_modifier
+        
+        for ark in addon_prefs.autoreg_keymaps:
+            mode_name = ark.mode_name
+            
+            space_type = ('VIEW_3D' if mode_name == '3D View' else 'EMPTY')
+            km = addon_keymaps.new(mode_name, space_type=space_type, region_type='WINDOW', modal=False)
+            
+            value_type = ark.value_type
+            if ":" not in value_type:
+                value_type += ": Press"
+            keys = key_monitor.parse_keys(value_type)
+            keys_modifier = key_monitor.parse_keys(ark.key_modifier)
+            
+            any = ark.any
+            shift = ark.shift
+            ctrl = ark.ctrl
+            alt = ark.alt
+            oskey = ark.oskey
+            key_modifier = 'NONE'
+            if keys_modifier and (not keys_modifier[0].startswith("!")):
+                key_modifier = keys_modifier[0].split(":")[0]
+            
+            '''
+            curr_props = props.get(mode_name)
+            if not curr_props:
+                curr_props = props.get('3D View')
+            if (not curr_props) and props:
+                curr_props = next(iter(props.values()))
+            '''
+            
+            for key in keys:
+                if key.startswith("!"):
+                    continue
+                
+                key_type, key_value = key.split(":")
+                kmi = km.keymap_items.new(idname, key_type, key_value, any=any, shift=shift, ctrl=ctrl, alt=alt, oskey=oskey, key_modifier=key_modifier, head=True)
+                
+                '''
+                if curr_props:
+                    for prop_name, prop_value in curr_props.items():
+                        if getattr(kmi.properties, prop_name) != prop_value:
+                            # keep default values non-modified
+                            setattr(kmi.properties, prop_name, prop_value)
+                '''
+
+class AutoRegKeymapInfo(bpy.types.PropertyGroup):
+    mode_names = ['3D View', 'Object Mode', 'Mesh', 'Curve', 'Armature', 'Metaball', 'Lattice', 'Font', 'Pose', 'Vertex Paint', 'Weight Paint', 'Face Mask', 'Image Paint', 'Sculpt', 'Particle']
+    #mode_name = bpy.props.StringProperty(name="Mode", description="Mode", default="")
+    mode_name = bpy.props.EnumProperty(items=[(m, m, m) for m in mode_names], name="Mode", description="Mode", default='3D View')
+    value_type = bpy.props.StringProperty(name="Type of event", description="Type of event", default="")
+    any =  bpy.props.BoolProperty(name="Any", description="Any modifier", default=False)
+    shift =  bpy.props.BoolProperty(name="Shift", description="Shift", default=False)
+    ctrl =  bpy.props.BoolProperty(name="Ctrl", description="Ctrl", default=False)
+    alt =  bpy.props.BoolProperty(name="Alt", description="Alt", default=False)
+    oskey =  bpy.props.BoolProperty(name="Cmd", description="Cmd (OS key)", default=False)
+    key_modifier = bpy.props.StringProperty(name="", description="Regular key presser as a modifier", default="")
+
+class AddAutoregKeymap(bpy.types.Operator):
+    bl_idname = "wm.mouselook_navigation_autoreg_keymap_add"
+    bl_label = "Add Autoreg Keymap"
+    bl_description = "Add auto-registered keymap"
+    
+    def execute(self, context):
+        wm = context.window_manager
+        userprefs = context.user_preferences
+        addon_prefs = userprefs.addons[__name__].preferences
+        addon_prefs.use_default_keymap = False
+        ark = addon_prefs.autoreg_keymaps.add()
+        return {'FINISHED'}
+
+class RemoveAutoregKeymap(bpy.types.Operator):
+    bl_idname = "wm.mouselook_navigation_autoreg_keymap_remove"
+    bl_label = "Remove Autoreg Keymap"
+    bl_description = "Remove auto-registered keymap"
+    
+    index = bpy.props.IntProperty(name="index")
+    
+    def execute(self, context):
+        wm = context.window_manager
+        userprefs = context.user_preferences
+        addon_prefs = userprefs.addons[__name__].preferences
+        addon_prefs.use_default_keymap = False
+        addon_prefs.autoreg_keymaps.remove(self.index)
+        return {'FINISHED'}
+
+class UpdateAutoregKeymaps(bpy.types.Operator):
+    bl_idname = "wm.mouselook_navigation_autoreg_keymaps_update"
+    bl_label = "Update Autoreg Keymaps"
+    bl_description = "Update auto-registered keymaps"
+    
+    def execute(self, context):
+        update_keymaps()
+        return {'FINISHED'}
+
 class VIEW3D_PT_mouselook_navigation(bpy.types.Panel):
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
@@ -2045,6 +2250,9 @@ class ThisAddonPreferences(bpy.types.AddonPreferences):
     color_crosshair_obscured = bpy.props.FloatVectorProperty(name="Crosshair (obscured)", default=(0.0, 0.0, 0.0), subtype='COLOR', min=0.0, max=1.0)
     color_zbrush_border = bpy.props.FloatVectorProperty(name="ZBrush border", default=(0.0, 0.0, 0.0), subtype='COLOR', min=0.0, max=1.0)
     
+    use_default_keymap = bpy.props.BoolProperty(name="Use default keymap", default=True, options={'HIDDEN'})
+    autoreg_keymaps = bpy.props.CollectionProperty(type=AutoRegKeymapInfo, name="Auto-registered keymaps", description="Auto-registered keymaps")
+    
     #is_enabled = bpy.props.BoolProperty(name="Enabled", description="Enable/disable Mouselook Navigation", default=True, options={'HIDDEN'})
     zoom_speed_modifier = bpy.props.FloatProperty(name="Zoom speed", description="Zooming speed", default=1.0)
     rotation_speed_modifier = bpy.props.FloatProperty(name="Rotation speed", description="Rotation speed", default=1.0)
@@ -2069,12 +2277,46 @@ class ThisAddonPreferences(bpy.types.AddonPreferences):
         col.row().prop(self, "color_crosshair_visible")
         col.row().prop(self, "color_crosshair_obscured")
         col.row().prop(self, "color_zbrush_border")
+        
+        row = layout.row()
+        row.label("Auto-registered keymaps:")
+        row.operator("wm.mouselook_navigation_autoreg_keymap_add", text="Add", icon='ZOOMIN')
+        row.operator("wm.mouselook_navigation_autoreg_keymaps_update", text="Update", icon='FILE_REFRESH')
+        autoreg_keymaps = self.autoreg_keymaps
+        for i, ark in enumerate(autoreg_keymaps):
+            row = layout.row()
+            split = row.split(0.6)
+            subrow = split.row()
+            subrow.prop(ark, "mode_name", text="")
+            subrow.prop(ark, "value_type", text="")
+            subrow = split.split(0.7, True)
+            subrow1 = subrow.row(True)
+            subrow1.prop(ark, "any", toggle=True)
+            subrow2 = subrow1.row(True)
+            subrow2.active = not ark.any
+            subrow2.prop(ark, "shift", toggle=True)
+            subrow2 = subrow1.row(True)
+            subrow2.active = not ark.any
+            subrow2.prop(ark, "ctrl", toggle=True)
+            subrow2 = subrow1.row(True)
+            subrow2.active = not ark.any
+            subrow2.prop(ark, "alt", toggle=True)
+            subrow2 = subrow1.row(True)
+            subrow2.active = not ark.any
+            subrow2.prop(ark, "oskey", toggle=True)
+            subrow.prop(ark, "key_modifier", text="")
+            row.operator("wm.mouselook_navigation_autoreg_keymap_remove", text="", icon='X').index = i
 
 def register():
+    bpy.utils.register_class(AutoRegKeymapInfo)
+    bpy.utils.register_class(AddAutoregKeymap)
+    bpy.utils.register_class(RemoveAutoregKeymap)
+    bpy.utils.register_class(UpdateAutoregKeymaps)
     bpy.utils.register_class(ThisAddonPreferences)
     
     bpy.utils.register_class(MouselookNavigation)
-    register_keymaps()
+    #register_keymaps()
+    update_keymaps(True)
     
     bpy.utils.register_class(MouselookNavigationRuntimeSettings)
     bpy.types.WindowManager.mouselook_navigation_runtime_settings = \
@@ -2087,11 +2329,16 @@ def unregister():
         del bpy.types.WindowManager.mouselook_navigation_runtime_settings
     bpy.utils.unregister_class(MouselookNavigationRuntimeSettings)
     
-    unregister_keymaps()
+    update_keymaps(False)
+    #unregister_keymaps()
     bpy.utils.unregister_class(MouselookNavigation)
     
     bpy.utils.unregister_class(ThisAddonPreferences)
+    bpy.utils.unregister_class(UpdateAutoregKeymaps)
+    bpy.utils.unregister_class(RemoveAutoregKeymap)
+    bpy.utils.unregister_class(AddAutoregKeymap)
+    bpy.utils.unregister_class(AutoRegKeymapInfo)
 
 if __name__ == "__main__":
-    unregister_keymaps()
+    #unregister_keymaps()
     register()
