@@ -7,6 +7,7 @@
             "input_settings": {
                 "allowed_transitions": ["NONE:ORBIT", "ORBIT:FLY", "ORBIT:FPS", "FLY:FPS"],
                 "zbrush_mode": true,
+                "independent_modes": true,
                 "keys_orbit_snap": "Shift",
                 "keys_pan": "Alt",
                 "keys_zoom": "!Alt"
@@ -19,6 +20,7 @@
             "input_settings": {
                 "allowed_transitions": ["NONE:PAN", "PAN:ZOOM"],
                 "zbrush_mode": true,
+                "independent_modes": true,
                 "keys_orbit_snap": "Shift",
                 "keys_pan": "Alt",
                 "keys_zoom": "!Alt"

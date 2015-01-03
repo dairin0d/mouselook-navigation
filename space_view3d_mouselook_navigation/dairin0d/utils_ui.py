@@ -30,7 +30,7 @@ import blf
 
 from mathutils import Color, Vector, Matrix, Quaternion, Euler
 
-from dairin0d.utils_python import AttributeHolder
+from .utils_python import AttributeHolder
 
 #============================================================================#
 

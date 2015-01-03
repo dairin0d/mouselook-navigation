@@ -24,7 +24,15 @@ from mathutils import Color, Vector, Matrix, Quaternion, Euler
 
 import math
 
-from dairin0d.utils_ui import calc_region_rect
+try:
+    import dairin0d
+    dairin0d_location = ""
+except ImportError:
+    dairin0d_location = "."
+
+exec("""
+from {0}dairin0d.utils_ui import calc_region_rect
+""".format(dairin0d_location))
 
 def calc_zbrush_border(area, region, scale=0.05, abs_min=16):
     clickable_region_size = calc_region_rect(area, region, overlap=False)[1]

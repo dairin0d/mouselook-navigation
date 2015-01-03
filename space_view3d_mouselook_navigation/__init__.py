@@ -21,7 +21,7 @@ bl_info = {
     "name": "Mouselook Navigation",
     "description": "Alternative 3D view navigation",
     "author": "dairin0d",
-    "version": (1, 0, 0),
+    "version": (1, 0, 1),
     "blender": (2, 7, 0),
     "location": "View3D > orbit/pan/dolly/zoom/fly/walk",
     "warning": "",
@@ -57,13 +57,20 @@ import time
 import os
 import json
 
-from dairin0d.utils_view3d import SmartView3D
-from dairin0d.utils_userinput import InputKeyMonitor, ModeStack, KeyMapUtils
-from dairin0d.utils_gl import cgl
-from dairin0d.utils_ui import NestedLayout, calc_region_rect
-from dairin0d.bpy_inspect import prop, BlRna
+try:
+    import dairin0d
+    dairin0d_location = ""
+except ImportError:
+    dairin0d_location = "."
 
-from dairin0d.utils_addon import AddonManager
+exec("""
+from {0}dairin0d.utils_view3d import SmartView3D
+from {0}dairin0d.utils_userinput import InputKeyMonitor, ModeStack, KeyMapUtils
+from {0}dairin0d.utils_gl import cgl
+from {0}dairin0d.utils_ui import NestedLayout, calc_region_rect
+from {0}dairin0d.bpy_inspect import prop, BlRna
+from {0}dairin0d.utils_addon import AddonManager
+""".format(dairin0d_location))
 
 from .utils_navigation import trackball, apply_collisions, calc_selection_center, calc_zbrush_border
 
@@ -84,12 +91,21 @@ In the wiki:
 * other peculiarities of the algorithms I use?
 
 TODO:
+* "release/build" script (copy files to dest folder without __pycache__ and *.pyc, create zip)
+* don't remove->add add keymap items when the new one is added to the end
+* full-screen grabbing of depth buffer on each redraw?
+* remove default keymap behavior and use a default preset instead?
 * Load/Save/Import/Export presets
 * Generic solution for keymap registration
 * [DONE, as a proof-of-concept] key presets
 ** Blender keys preset
 ** ZBrush Keys preset (needs to be set up at least for Mesh and Sculpt modes too)
-* in zbrush setup, moth3r complains that there is a bit of panning before zoom mode is entered (reminder: pan is Alt, zoom is !Alt)
+* [DONE] installing doesn't work (dairin0d couldn't be found)
+* [DONE] option to turn off second crosshair? (+put them in N panel)
+* [DONE] ZBrush zooming should be inverted compared to Blender
+* [DONE] in zbrush setup, moth3r complains that there is a bit of panning before zoom mode is entered (reminder: pan is Alt, zoom is !Alt)
+  in ZBrush, the position is reset to the starting position when zooming is enabled
+  (if then switched to pan, it will snap to the position of the last pan)
 * [DONE] in Camera View, shift+drag changes view_camera_offset and mouse wheel changes view_camera_zoom (unless lock_camera is True); in Fly/FPS modes, Lock Camera To View should be ignored
 * [DONE] on exiting Fly/FPS modes, mouse should be set to focus projection
 * [DONE] stable sv.focus projection without actually projecting (use camera offset/zoom)
@@ -121,9 +137,11 @@ class MouselookNavigation_InputSettings:
     default_mode = 'ORBIT' | prop("Default mode", name="Default mode", items=modes)
     allowed_transitions = set(transitions) | prop("Allowed transitions between modes", name="Transitions", items=transitions)
     
-    zbrush_mode = False | prop("The operator would be invoked only if mouse is over empty space or close to region border", name="ZBrush mode")
-    
     ortho_unrotate = True | prop("In Ortho mode, rotation is abandoned if another mode is selected", name="Ortho unrotate")
+    
+    independent_modes = False | prop("When switching to a different mode, use the mode's last position/rotation/zoom", name="Independent modes")
+    
+    zbrush_mode = False | prop("The operator would be invoked only if mouse is over empty space or close to region border", name="ZBrush mode")
     
     def _keyprop(name, default_keys):
         return default_keys | prop(name, name)
@@ -158,9 +176,10 @@ class MouselookNavigation_InputSettings:
             with layout.row():
                 with layout.column():
                     layout.prop(self, "default_mode")
-                    layout.prop(self, "zbrush_mode", toggle=True)
                     layout.prop(self, "ortho_unrotate", toggle=True)
-                    layout.label() # just an empty line
+                    layout.prop(self, "independent_modes", toggle=True)
+                    layout.prop(self, "zbrush_mode", toggle=True)
+                    #layout.label() # just an empty line
                     layout.prop(self, "keys_rotmode_switch")
                     layout.prop(self, "keys_origin_mouse")
                     layout.prop(self, "keys_origin_selection")
@@ -199,8 +218,9 @@ class MouselookNavigation:
     def copy_input_settings(self, inp_set):
         self.default_mode = inp_set.default_mode
         self.allowed_transitions = inp_set.allowed_transitions
-        self.zbrush_mode = inp_set.zbrush_mode
         self.ortho_unrotate = inp_set.ortho_unrotate
+        self.independent_modes = inp_set.independent_modes
+        self.zbrush_mode = inp_set.zbrush_mode
     
     def create_keycheckers(self, event, inp_set):
         self.keys_invoke = self.km.keychecker(event.type)
@@ -273,6 +293,9 @@ class MouselookNavigation:
         use_zoom_to_mouse = userprefs.view.use_zoom_to_mouse
         use_auto_perspective = userprefs.view.use_auto_perspective
         
+        addon_prefs = addon.preferences
+        flips = addon_prefs.flips
+        
         use_zoom_to_mouse |= self.force_origin_mouse
         use_auto_perspective &= self.rotation_snap_autoperspective
         
@@ -297,6 +320,19 @@ class MouselookNavigation:
         mouse_delta = mouse - mouse_prev
         mouse_region = mouse - region_pos
         
+        if self.independent_modes and (mode != prev_mode) and (mode not in {'FLY', 'FPS'}):
+            mode_state = self.modes_state[mode]
+            self.sv.is_perspective = mode_state[0]
+            self.sv.distance = mode_state[1]
+            self.pos = mode_state[2].copy()
+            self.sv.focus = self.pos
+            self.rot = mode_state[3].copy()
+            self.euler = mode_state[4].copy()
+            if rotate_method == 'TURNTABLE':
+                self.sv.turntable_euler = self.euler # for turntable
+            else:
+                self.sv.rotation = self.rot # for trackball
+        
         if (prev_mode in {'FLY', 'FPS'}) and (mode not in {'FLY', 'FPS'}):
             focus_proj = self.sv.focus_projected + region_pos
             context.window.cursor_warp(focus_proj.x, focus_proj.y)
@@ -310,7 +346,7 @@ class MouselookNavigation:
         clock = time.clock()
         dt = 0.01
         speed_move = 2.5 * self.sv.distance# * dt # use realtime dt
-        speed_zoom = ZOOM_SPEED_COEF * dt
+        speed_zoom = Vector((1, 1)) * ZOOM_SPEED_COEF * dt
         speed_zoom_wheel = ZOOM_WHEEL_COEF
         speed_rot = TRACKBALL_SPEED_COEF * dt
         speed_euler = Vector((-1, 1)) * TURNTABLE_SPEED_COEF * dt
@@ -319,6 +355,17 @@ class MouselookNavigation:
         if invert_mouse_zoom:
             speed_zoom *= -1
         if invert_wheel_zoom:
+            speed_zoom_wheel *= -1
+        
+        if flips.orbit_x:
+            speed_euler.x *= -1
+        if flips.orbit_y:
+            speed_euler.y *= -1
+        if flips.zoom_x:
+            speed_zoom.x *= -1
+        if flips.zoom_y:
+            speed_zoom.y *= -1
+        if flips.zoom_wheel:
             speed_zoom_wheel *= -1
         
         speed_move *= self.fps_speed_modifier
@@ -403,6 +450,10 @@ class MouselookNavigation:
                         if rotate_method == 'TURNTABLE':
                             self.change_euler(mouse_delta.y * speed_euler.y, mouse_delta.x * speed_euler.x, 0)
                         else: # 'TRACKBALL'
+                            if flips.orbit_x:
+                                mouse_delta.x *= -1
+                            if flips.orbit_y:
+                                mouse_delta.y *= -1
                             self.change_rot_mouse(mouse_delta, mouse, speed_rot, trackball_mode)
                     elif mode == 'PAN':
                         self.change_pos_mouse(mouse_delta, False)
@@ -452,6 +503,10 @@ class MouselookNavigation:
                         if (rotate_method == 'TURNTABLE') or is_orbit_snap:
                             self.change_euler(mouse_delta.y * speed_euler.y, mouse_delta.x * speed_euler.x, 0)
                         else: # 'TRACKBALL'
+                            if flips.orbit_x:
+                                mouse_delta.x *= -1
+                            if flips.orbit_y:
+                                mouse_delta.y *= -1
                             self.change_rot_mouse(mouse_delta, mouse, speed_rot, trackball_mode)
                         
                         if use_auto_perspective:
@@ -462,9 +517,11 @@ class MouselookNavigation:
                     elif mode == 'PAN':
                         self.change_pos_mouse(mouse_delta, False)
                     elif mode == 'DOLLY':
-                        self.change_pos_mouse(mouse_delta, True)
+                        if flips.dolly_y:
+                            mouse_delta.y *= -1
+                        self.change_pos_mouse(Vector((0.0, mouse_delta.y)), True)
                     elif mode == 'ZOOM':
-                        self.change_distance((-mouse_delta.y - mouse_delta.x) * speed_zoom, use_zoom_to_mouse)
+                        self.change_distance((mouse_delta.y*speed_zoom.y + mouse_delta.x*speed_zoom.x), use_zoom_to_mouse)
                 
                 if wheel_delta != 0:
                     self.change_distance(wheel_delta * speed_zoom_wheel, use_zoom_to_mouse)
@@ -473,7 +530,7 @@ class MouselookNavigation:
                     if mode == 'PAN':
                         self.sv.camera_offset_pixels -= mouse_delta
                     elif mode == 'ZOOM':
-                        self.sv.camera_zoom += (-mouse_delta.y - mouse_delta.x) * (speed_zoom*10)
+                        self.sv.camera_zoom += (mouse_delta.y*speed_zoom.y + mouse_delta.x*speed_zoom.x) * -10
         
         if event.type.startswith('TIMER'):
             if self.sv.can_move:
@@ -504,6 +561,8 @@ class MouselookNavigation:
             m_ofs.translation = self.explicit_orbit_origin
             self.pos = m_ofs * pre_rotate_focus
             self.sv.focus = self.pos
+        
+        self.modes_state[mode] = (self.sv.is_perspective, self.sv.distance, self.pos.copy(), self.rot.copy(), self.euler.copy())
         
         self.update_cursor_icon(context)
         txt = "{} (zoom={:.3f})".format(mode, self.sv.distance)
@@ -865,6 +924,7 @@ class MouselookNavigation:
         self.color_crosshair_obscured = addon_prefs.get_color("color_crosshair_obscured")
         self.color_zbrush_border = addon_prefs.get_color("color_zbrush_border")
         self.show_crosshair = addon_prefs.show_crosshair
+        self.show_focus = addon_prefs.show_focus
         self.show_zbrush_border = addon_prefs.show_zbrush_border
         
         settings = addon_prefs
@@ -900,6 +960,10 @@ class MouselookNavigation:
         self.rot = self.rot0.copy()
         self.euler0 = self._euler0.copy()
         self.euler = self.euler0.copy()
+        
+        self.modes_state = {}
+        for mode in MouselookNavigation_InputSettings.modes:
+            self.modes_state[mode] = (self.sv.is_perspective, self.sv.distance, self.pos.copy(), self.rot.copy(), self.euler.copy())
         
         self.clock = self.clock0
         self.velocity = Vector()
@@ -966,6 +1030,8 @@ def draw_crosshair(self, context, use_focus):
     
     focus_proj = None
     if use_focus:
+        if self.explicit_orbit_origin and not self.show_focus:
+            return
         alpha = (0.4 if self.explicit_orbit_origin else 1.0)
         focus_proj = self.sv.focus_projected
         z_ref = self.sv.z_distance(self.sv.focus, 0.01)
@@ -1209,6 +1275,14 @@ def autoreg_keymaps_preset_load(self, context, preset_id = '' | prop("Preset ID"
     
     preset = PresetManager.presets[self.preset_id]
     
+    flips = preset.get("flips", ())
+    addon_prefs.flips.orbit_x = "orbit_x" in flips
+    addon_prefs.flips.orbit_y = "orbit_y" in flips
+    addon_prefs.flips.dolly = "dolly" in flips
+    addon_prefs.flips.zoom_x = "zoom_x" in flips
+    addon_prefs.flips.zoom_y = "zoom_y" in flips
+    addon_prefs.flips.zoom_wheel = "zoom_wheel" in flips
+    
     addon_prefs.use_universal_input_settings = preset.get("universal", True)
     BlRna.reset(addon_prefs.universal_input_settings)
     BlRna.deserialize(addon_prefs.universal_input_settings, preset.get("settings"))
@@ -1235,6 +1309,13 @@ class VIEW3D_PT_mouselook_navigation:
         addon_prefs = addon.preferences
         settings = addon_prefs
         
+        with layout.row(True):
+            layout.label("Show/hide:")
+            layout.prop(settings, "show_crosshair", text="", icon='ZOOMIN')
+            with layout.row(True)(active=settings.show_crosshair):
+                layout.prop(settings, "show_focus", text="", icon='LAMP_HEMI')
+            layout.prop(settings, "show_zbrush_border", text="", icon='BORDER_RECT')
+        
         with layout.column(True):
             layout.prop(settings, "zoom_speed_modifier")
             layout.prop(settings, "rotation_speed_modifier")
@@ -1260,14 +1341,33 @@ class VIEW3D_PT_mouselook_navigation:
         
         layout.prop(settings, "autolevel_speed_modifier")
 
+@addon.PropertyGroup
+class NavigationDirectionFlip:
+    orbit_x = False | prop()
+    orbit_y = False | prop()
+    dolly = False | prop()
+    zoom_x = False | prop()
+    zoom_y = False | prop()
+    zoom_wheel = False | prop()
+    
+    def draw(self, layout):
+        layout.label("Invert:")
+        layout.prop(self, "orbit_x", toggle=True)
+        layout.prop(self, "orbit_y", toggle=True)
+        layout.prop(self, "dolly", toggle=True)
+        layout.prop(self, "zoom_x", toggle=True)
+        layout.prop(self, "zoom_y", toggle=True)
+        layout.prop(self, "zoom_wheel", toggle=True)
+
 @addon.Preferences.Include
 class ThisAddonPreferences:
-    show_crosshair = True | prop(name="Show Crosshair")
-    show_zbrush_border = True | prop(name="Show ZBrush border")
-    use_blender_colors = True | prop(name="Use Blender's colors")
-    color_crosshair_visible = Color() | prop(name="Crosshair (visible)")
-    color_crosshair_obscured = Color() | prop(name="Crosshair (obscured)")
-    color_zbrush_border = Color() | prop(name="ZBrush border")
+    show_crosshair = True | prop("Crosshair visibility", name="Show Crosshair")
+    show_focus = True | prop("Orbit Center visibility", name="Show Orbit Center")
+    show_zbrush_border = True | prop("ZBrush border visibility", name="Show ZBrush border")
+    use_blender_colors = True | prop("Use Blender's colors", name="Use Blender's colors")
+    color_crosshair_visible = Color() | prop("Crosshair (visible) color", name="Crosshair (visible)")
+    color_crosshair_obscured = Color() | prop("Crosshair (obscured) color", name="Crosshair (obscured)")
+    color_zbrush_border = Color() | prop("ZBrush border color", name="ZBrush border")
     
     def get_color(self, attr_name):
         if self.use_blender_colors:
@@ -1290,6 +1390,8 @@ class ThisAddonPreferences:
     use_universal_input_settings = True | prop("Use same settings for each keymap", name="Universal")
     universal_input_settings = MouselookNavigation_InputSettings | prop()
     
+    flips = NavigationDirectionFlip | prop()
+    
     zoom_speed_modifier = 1.0 | prop("Zooming speed", name="Zoom speed")
     rotation_speed_modifier = 1.0 | prop("Rotation speed", name="Rotation speed")
     fps_speed_modifier = 1.0 | prop("FPS movement speed", name="FPS speed")
@@ -1309,13 +1411,21 @@ class ThisAddonPreferences:
         
         with layout.row():
             with layout.column():
-                layout.prop(self, "use_blender_colors")
+                layout.label("")
                 layout.prop(self, "show_crosshair")
+                layout.prop(self, "show_focus")
                 layout.prop(self, "show_zbrush_border")
-            with layout.column()(active=not self.use_blender_colors):
-                layout.row().prop(self, "color_crosshair_visible")
-                layout.row().prop(self, "color_crosshair_obscured")
-                layout.row().prop(self, "color_zbrush_border")
+            with layout.column():
+                with layout.row():
+                    layout.label("")
+                    layout.prop(self, "use_blender_colors")
+                with layout.column()(active=not self.use_blender_colors):
+                    layout.row().prop(self, "color_crosshair_visible")
+                    layout.row().prop(self, "color_crosshair_obscured")
+                    layout.row().prop(self, "color_zbrush_border")
+        
+        with layout.row(True):
+            self.flips.draw(layout)
         
         with layout.box():
             with layout.row():
