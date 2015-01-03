@@ -1,0 +1,28 @@
+{
+    "universal": false,
+    "keymaps": [
+        {
+            "keymaps": ["3D View", "Object Mode", "Mesh", "Curve", "Armature", "Metaball", "Lattice", "Font", "Pose", "Vertex Paint", "Weight Paint", "Image Paint", "Sculpt", "Particle"],
+            "value_type": "Left Mouse",
+            "input_settings": {
+                "allowed_transitions": ["NONE:ORBIT", "ORBIT:FLY", "ORBIT:FPS", "FLY:FPS"],
+                "zbrush_mode": true,
+                "keys_orbit_snap": "Shift",
+                "keys_pan": "Alt",
+                "keys_zoom": "!Alt"
+            }
+        },
+        {
+            "keymaps": ["3D View", "Object Mode", "Mesh", "Curve", "Armature", "Metaball", "Lattice", "Font", "Pose", "Vertex Paint", "Weight Paint", "Image Paint", "Sculpt", "Particle"],
+            "value_type": "Left Mouse",
+            "alt": true,
+            "input_settings": {
+                "allowed_transitions": ["NONE:PAN", "PAN:ZOOM"],
+                "zbrush_mode": true,
+                "keys_orbit_snap": "Shift",
+                "keys_pan": "Alt",
+                "keys_zoom": "!Alt"
+            }
+        }
+    ]
+}
