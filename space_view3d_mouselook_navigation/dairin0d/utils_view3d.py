@@ -496,8 +496,8 @@ class SmartView3D:
         near = origin + view_dir * near
         far = origin + view_dir * far
         
-        a = region_2d_to_location_3d(region, rv3d, xy.copy(), near)
-        b = region_2d_to_location_3d(region, rv3d, xy.copy(), far)
+        a = region_2d_to_location_3d(region, rv3d, Vector(xy).to_2d(), near).to_3d()
+        b = region_2d_to_location_3d(region, rv3d, Vector(xy).to_2d(), far).to_3d()
         return a, b
     
     @staticmethod

@@ -21,7 +21,7 @@ bl_info = {
     "name": "Mouselook Navigation",
     "description": "Alternative 3D view navigation",
     "author": "dairin0d",
-    "version": (1, 0, 1),
+    "version": (1, 0, 2),
     "blender": (2, 7, 0),
     "location": "View3D > orbit/pan/dolly/zoom/fly/walk",
     "warning": "",
@@ -1176,7 +1176,10 @@ def update_keymaps(activate=True):
                         kmi_datas.append((insert_after, kmi_data, insert_before))
         
         for keymap_name, kmi_datas in kmi_to_insert.items():
-            km = keymaps[keymap_name] # expected to exist in user keymaps
+            try:
+                km = keymaps[keymap_name] # expected to exist in user keymaps
+            except:
+                continue
             KeyMapUtils.insert(km, kmi_datas)
 
 @addon.PropertyGroup

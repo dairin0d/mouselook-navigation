@@ -327,14 +327,12 @@ class NestedLayout:
         changed = bpy.props.BoolProperty()
         def update(self, context):
             self.changed = True
-        value = bpy.props.BoolProperty(description="Fold/unfold",
-            update=update, name="")
+        value = bpy.props.BoolProperty(description="Fold/unfold", update=update, name="")
     bpy.utils.register_class(FoldPG) # REGISTER
     
     # make up some name that's unlikely to be used by normal addons
     folds_keyname = "bpy_extras_ui_utils_NestedLayout_ui_folds"
-    setattr(bpy.types.Screen, folds_keyname,
-        bpy.props.CollectionProperty(type=FoldPG)) # REGISTER
+    setattr(bpy.types.Screen, folds_keyname, bpy.props.CollectionProperty(type=FoldPG)) # REGISTER
     
     folded = False # stores folded status from the latest fold() call
     

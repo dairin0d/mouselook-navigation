@@ -35,8 +35,9 @@ from .utils_text import compress_whitespace
 
 class BlEnums:
     common_attrs = {'bl_idname', 'bl_label', 'bl_description', 'bl_options',
-        'bl_context', 'bl_region_type', 'bl_space_type', 'bl_use_postprocess',
-        'bl_use_preview', 'bl_use_shading_nodes', 'is_animation', 'is_preview',
+        'bl_context', 'bl_region_type', 'bl_space_type', 'bl_category',
+        'bl_use_postprocess', 'bl_use_preview', 'bl_use_shading_nodes',
+        'is_animation', 'is_preview',
         'bl_width_default', 'bl_width_max', 'bl_width_min',
         'bl_height_default', 'bl_height_max', 'bl_height_min'}
     
