@@ -159,6 +159,39 @@ class CGL:
         return RenderBatch(mode)
     
     @staticmethod
+    def read_zbuffer(xy, wh=(1, 1), centered=False, src=None):
+        if isinstance(wh, (int, float)):
+            wh = (wh, wh)
+        elif len(wh) < 2:
+            wh = (wh[0], wh[0])
+        
+        x, y, w, h = int(xy[0]), int(xy[1]), int(wh[0]), int(wh[1])
+        
+        if centered:
+            x -= w // 2
+            y -= h // 2
+        
+        buf_size = w*h
+        
+        if src is None:
+            # xy is in window coordinates!
+            zbuf = bgl.Buffer(bgl.GL_FLOAT, [buf_size])
+            bgl.glReadPixels(x, y, w, h, bgl.GL_DEPTH_COMPONENT, bgl.GL_FLOAT, zbuf)
+        else:
+            src, w0, h0 = src
+            template = [0.0] * buf_size
+            for dy in range(h):
+                y0 = min(max(y + dy, 0), h0-1)
+                for dx in range(w):
+                    x0 = min(max(x + dx, 0), w0-1)
+                    i0 = x0 + y0 * w0
+                    i1 = dx + dy * w
+                    template[i1] = src[i0]
+            zbuf = bgl.Buffer(bgl.GL_FLOAT, [buf_size], template)
+        
+        return zbuf
+    
+    @staticmethod
     def matrix_to_buffer(m, dtype=bgl.GL_FLOAT):
         return bgl.Buffer(dtype, 16, [m[i][j] for i in range(4) for j in range(4)])
     

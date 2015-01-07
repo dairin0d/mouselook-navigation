@@ -475,9 +475,12 @@ def rv3d_from_region(area, region):
         return None
     
     space_data = area.spaces.active
-    quadviews = space_data.region_quadviews
+    try:
+        quadviews = space_data.region_quadviews
+    except AttributeError:
+        quadviews = None # old API
     
-    if len(quadviews) == 0:
+    if not quadviews:
         return space_data.region_3d
     
     x_id = 0
@@ -505,15 +508,9 @@ def ui_contexts_under_coord(x, y):
             space_data = area.spaces.active
             for region in area.regions:
                 if point_in_rect(point, region):
-                    region_data = rv3d_from_region(area, region)
-                    context = AttributeHolder()
-                    context.window = window
-                    context.screen = screen
-                    context.area = area
-                    context.region = region
-                    context.space_data = space_data
-                    context.region_data = region_data
-                    yield context
+                    yield dict(window=window, screen=screen,
+                        area=area, region=region, space_data=space_data,
+                        region_data=rv3d_from_region(area, region))
             break
 
 def ui_context_under_coord(x, y, index=0):
@@ -522,5 +519,33 @@ def ui_context_under_coord(x, y, index=0):
         if i == index:
             return ui_context
     return ui_context
+
+# TODO: relative coords?
+def convert_ui_coord(window, area, region, xy, src, dst, vector=True):
+    x, y = xy
+    if src == dst:
+        pass
+    elif src == 'WINDOW':
+        if dst == 'AREA':
+            x -= area.x
+            y -= area.y
+        elif dst == 'REGION':
+            x -= region.x
+            y -= region.y
+    elif src == 'AREA':
+        if dst == 'WINDOW':
+            x += area.x
+            y += area.y
+        elif dst == 'REGION':
+            x += area.x - region.x
+            y += area.y - region.y
+    elif src == 'REGION':
+        if dst == 'WINDOW':
+            x += region.x
+            y += region.y
+        elif dst == 'AREA':
+            x += region.x - area.x
+            y += region.y - area.y
+    return (Vector((x, y)) if vector else (int(x), int(y)))
 
 #============================================================================#

@@ -20,8 +20,8 @@
 bl_info = {
     "name": "Mouselook Navigation",
     "description": "Alternative 3D view navigation",
-    "author": "dairin0d",
-    "version": (1, 0, 2),
+    "author": "dairin0d, moth3r",
+    "version": (1, 0, 3),
     "blender": (2, 7, 0),
     "location": "View3D > orbit/pan/dolly/zoom/fly/walk",
     "warning": "",
@@ -80,32 +80,43 @@ addon = AddonManager()
 Note: due to the use of timer, operator consumes more resources than Blender's default
 ISSUES:
 * correct & stable collision detection?
-* in sculpt mode, raycast uses original (non-sculpted mesh). What is the best way around that?
 * Blender's trackball
-* ortho-grid/quadview-clip/projection-name display is not updated
-* zoom/rotate around last paint/sculpt stroke ?
+* ortho-grid/quadview-clip/projection-name display is not updated (do the issues disappear in 2.73 / Gooseberry branch?)
+* Blender doesn't provide information about current selection center, last paint/sculpt stroke, what non-geometry objects are under the mouse
 
 In the wiki:
 * explain the rules for key setup (how the text is interpreted)
 * explain fly/walk modes (e.g. what the scrollwheel does)
 * other peculiarities of the algorithms I use?
+* put a warning that if "emulate 3 mouse button" is enabled, the Alt key pan won't work in ZBrush preset (in this case, Alt+LMB will emulate middle mouse button)
 
-TODO:
+System:
+* transparent preferences/external/internal get/set? (so that the user code doesn't need to know where exactly each setting is stored). BUT: will it work with layout code? (layout.prop(data, prop_name))
+* make it possible to use the same addon object in addon's imported submodules (use __new__ instead of __init__ ?)
 * "release/build" script (copy files to dest folder without __pycache__ and *.pyc, create zip)
-* don't remove->add add keymap items when the new one is added to the end
-* full-screen grabbing of depth buffer on each redraw?
-* remove default keymap behavior and use a default preset instead?
+
+Config/Presets:
+* Load/Save/Import/Export config (+move almost everything from preferences to config)
 * Load/Save/Import/Export presets
+
+Depth/Ray casting:
+* [DONE] make possible to select lattice vertices with LMB when ZBrush preset is used (use zbuffer); use up-to-date geometry in Sculpt mode
+* [DONE] full-screen grabbing of depth buffer on each redraw?
+* zoom/rotate around last paint/sculpt stroke? (record last depth and raycast result under mouse?)
+
+Keymaps:
+* remove default keymap behavior and use a default preset instead?
 * Generic solution for keymap registration
-* [DONE, as a proof-of-concept] key presets
-** Blender keys preset
-** ZBrush Keys preset (needs to be set up at least for Mesh and Sculpt modes too)
+
+* [DONE] don't remove->add add keymap items when the new one is added to the end
+* [DONE] in edit/paint/sculpt modes, when nothing is selected, rotate using the currently selected object's origin
+* [DONE] make mouselook temporary toggle saveable
+* [DONE] bug when rotating in lattice edit mode
+* [DONE] key presets (Blender, ZBrush)
 * [DONE] installing doesn't work (dairin0d couldn't be found)
 * [DONE] option to turn off second crosshair? (+put them in N panel)
 * [DONE] ZBrush zooming should be inverted compared to Blender
-* [DONE] in zbrush setup, moth3r complains that there is a bit of panning before zoom mode is entered (reminder: pan is Alt, zoom is !Alt)
-  in ZBrush, the position is reset to the starting position when zooming is enabled
-  (if then switched to pan, it will snap to the position of the last pan)
+* [DONE] in ZBrush, the position is reset to the starting position when zooming is enabled
 * [DONE] in Camera View, shift+drag changes view_camera_offset and mouse wheel changes view_camera_zoom (unless lock_camera is True); in Fly/FPS modes, Lock Camera To View should be ignored
 * [DONE] on exiting Fly/FPS modes, mouse should be set to focus projection
 * [DONE] stable sv.focus projection without actually projecting (use camera offset/zoom)
@@ -254,9 +265,7 @@ class MouselookNavigation:
     
     @classmethod
     def poll(cls, context):
-        wm = context.window_manager
-        settings = addon.external
-        if not settings.is_enabled:
+        if not addon.preferences.is_enabled:
             return False
         return (context.space_data.type == 'VIEW_3D')
     
@@ -272,14 +281,6 @@ class MouselookNavigation:
         region = context.region
         v3d = context.space_data
         rv3d = context.region_data
-        
-        # Sometimes ZBuffer gets cleared for some reason,
-        # so we need to wait at least 1 frame to get depth
-        if self.delayed_mouse_depth is not None:
-            if self.delayed_mouse_depth[0] > 0:
-                self.process_delayed_depth()
-            else:
-                return {'RUNNING_MODAL'}
         
         region_pos, region_size = self.sv.region_rect()
         
@@ -422,8 +423,9 @@ class MouselookNavigation:
                         self.teleport_allowed = True
                     
                     if self.teleport_allowed and self.keys_fps_teleport():
-                        ray_data = self.sv.ray(self.sv.project(self.sv.focus))
-                        raycast_result = context.scene.ray_cast(ray_data[0], ray_data[1])
+                        #ray_data = self.sv.ray(self.sv.project(self.sv.focus))
+                        #raycast_result = context.scene.ray_cast(ray_data[0], ray_data[1])
+                        raycast_result = self.sv.ray_cast(self.sv.project(self.sv.focus))
                         if raycast_result[0]:
                             normal = raycast_result[4]
                             if normal.dot(ray_data[1] - ray_data[0]) > 0:
@@ -584,7 +586,7 @@ class MouselookNavigation:
         fps_speed = self.calc_FPS_speed(walk_speed_factor)
         if fps_speed.magnitude > 0:
             if not self.sv.is_perspective:
-                self.change_distance(fps_speed.y * speed_zoom*(-4), use_zoom_to_mouse)
+                self.change_distance((fps_speed.y * speed_zoom.y) * (-4), use_zoom_to_mouse)
                 fps_speed.y = 0
             speed_move *= dt
             abs_speed = self.abs_fps_speed(fps_speed.x, fps_speed.y, fps_speed.z, speed_move, use_gravity)
@@ -811,28 +813,6 @@ class MouselookNavigation:
         z = math.sqrt(1.0 - xy.length_squared)
         return Vector((xy.x, -z, xy.y)).normalized(), x_neg, y_neg
     
-    def process_delayed_depth(self):
-        redraws_count, mouse, mouse_region = self.delayed_mouse_depth
-        
-        zbuf = self.sv.read_zbuffer(mouse)[0]
-        zcam = self.sv.zbuf_to_depth(zbuf)
-        
-        if zbuf < 1.0:
-            self.explicit_orbit_origin = self.sv.unproject(mouse_region, zcam)
-            if self.sv.is_perspective:
-                # Blender adjusts distance so that focus and z-point lie in the same plane
-                viewpoint = self.sv.viewpoint
-                self.sv.distance = zcam
-                self.sv.viewpoint = viewpoint
-                # Update memorized values
-                self._distance0 = self.sv.distance
-                self._pos0 = self.sv.focus
-                self.pos = self._pos0.copy()
-        else:
-            self.explicit_orbit_origin = self.sv.unproject(mouse_region)
-        
-        self.delayed_mouse_depth = None
-    
     def update_cursor_icon(self, context):
         # DEFAULT, NONE, WAIT, CROSSHAIR, MOVE_X, MOVE_Y, KNIFE, TEXT, PAINT_BRUSH, HAND, SCROLL_X, SCROLL_Y, SCROLL_XY, EYEDROPPER
         if self.mode_stack.mode in {'FLY', 'FPS'}:
@@ -879,10 +859,8 @@ class MouselookNavigation:
         mouse_region = mouse - region_pos
         mouse_clickable_region = mouse - clickable_region_pos
         
-        zbuf = self.sv.read_zbuffer(mouse)[0]
-        zcam = self.sv.zbuf_to_depth(zbuf)
-        ray_data = self.sv.ray(mouse_region)
-        raycast_result = context.scene.ray_cast(ray_data[0], ray_data[1])
+        raycast_result = self.sv.ray_cast(mouse_region)
+        depthcast_result = self.sv.depth_cast(mouse_region, addon_prefs.zbrush_radius)
         
         self.zoom_to_selection = addon_prefs.zoom_to_selection
         self.force_origin_mouse = self.keys_origin_mouse()
@@ -896,21 +874,26 @@ class MouselookNavigation:
             self.use_origin_selection = False
             self.use_origin_mouse = True
         
-        self.delayed_mouse_depth = None
         self.explicit_orbit_origin = None
         if self.use_origin_selection:
-            self.explicit_orbit_origin = calc_selection_center(context)
+            self.explicit_orbit_origin = calc_selection_center(context, True)
         elif self.use_origin_mouse:
-            self.delayed_mouse_depth = [0, mouse, mouse_region]
+            if depthcast_result[0]:
+                self.explicit_orbit_origin = depthcast_result[3]
+                if self.sv.is_perspective:
+                    # Blender adjusts distance so that focus and z-point lie in the same plane
+                    viewpoint = self.sv.viewpoint
+                    self.sv.distance = self.sv.z_distance(self.explicit_orbit_origin)
+                    self.sv.viewpoint = viewpoint
+            else:
+                self.explicit_orbit_origin = self.sv.unproject(mouse_region)
         
         mode_keys = {'ORBIT':self.keys_orbit, 'PAN':self.keys_pan, 'DOLLY':self.keys_dolly, 'ZOOM':self.keys_zoom, 'FLY':self.keys_fly, 'FPS':self.keys_fps}
         self.mode_stack = ModeStack(mode_keys, self.allowed_transitions, self.default_mode, 'NONE')
         self.mode_stack.update()
         if self.mode_stack.mode == 'NONE':
             if self.zbrush_mode:
-                # In Sculpt mode, zbuffer seems to be cleared!
-                # Also, zbuf can be written by non-geometry, which is probably not desirable
-                is_over_obj = raycast_result[0]# or (zbuf < 1.0)
+                is_over_obj = depthcast_result[0] # raycast_result[0] -- not up-to-date and ignores non-geometry
                 mouse_region_11 = clickable_region_size - mouse_clickable_region
                 wrk_x = min(mouse_clickable_region.x, mouse_region_11.x)
                 wrk_y = min(mouse_clickable_region.y, mouse_region_11.y)
@@ -1067,9 +1050,6 @@ def draw_crosshair(self, context, use_focus):
 def draw_callback_view(self, context):
     if self.sv.region_data != context.region_data:
         return
-    
-    if self.delayed_mouse_depth is not None:
-        self.delayed_mouse_depth[0] += 1 # increment redraws counter
     
     if self.show_crosshair:
         draw_crosshair(self, context, False)
@@ -1304,7 +1284,7 @@ def autoreg_keymaps_preset_load(self, context, preset_id = '' | prop("Preset ID"
 @addon.Panel(idname="VIEW3D_PT_mouselook_navigation", space_type='VIEW_3D', region_type='UI', label="Mouselook Nav.")
 class VIEW3D_PT_mouselook_navigation:
     def draw_header(self, context):
-        self.layout.prop(addon.external, "is_enabled", text="")
+        self.layout.prop(addon.preferences, "is_enabled", text="")
     
     def draw(self, context):
         layout = NestedLayout(self.layout)
@@ -1393,6 +1373,10 @@ class ThisAddonPreferences:
     use_universal_input_settings = True | prop("Use same settings for each keymap", name="Universal")
     universal_input_settings = MouselookNavigation_InputSettings | prop()
     
+    zbrush_radius = 20 | prop("In ZBrush mode, allow navigation only when distance (in pixels) to the nearest geometry is greater than this value", name="ZBrush radius", min=0, max=64)
+    
+    is_enabled = True | prop("Enable/disable Mouselook Navigation", name="Enabled")
+    
     flips = NavigationDirectionFlip | prop()
     
     zoom_speed_modifier = 1.0 | prop("Zooming speed", name="Zoom speed")
@@ -1414,18 +1398,18 @@ class ThisAddonPreferences:
         
         with layout.row():
             with layout.column():
-                layout.label("")
+                layout.prop(self, "zbrush_radius")
+                layout.prop(self, "show_zbrush_border")
                 layout.prop(self, "show_crosshair")
                 layout.prop(self, "show_focus")
-                layout.prop(self, "show_zbrush_border")
             with layout.column():
                 with layout.row():
                     layout.label("")
                     layout.prop(self, "use_blender_colors")
                 with layout.column()(active=not self.use_blender_colors):
+                    layout.row().prop(self, "color_zbrush_border")
                     layout.row().prop(self, "color_crosshair_visible")
                     layout.row().prop(self, "color_crosshair_obscured")
-                    layout.row().prop(self, "color_zbrush_border")
         
         with layout.row(True):
             self.flips.draw(layout)
@@ -1471,8 +1455,6 @@ class ThisAddonPreferences:
             inp_set.draw(layout)
 
 def register():
-    addon.External.is_enabled = True | -prop("Enable/disable Mouselook Navigation", name="Enabled")
-    
     addon.register()
     
     addon.draw_handler_add(bpy.types.SpaceView3D, draw_callback_px, (None, None), 'WINDOW', 'POST_PIXEL')

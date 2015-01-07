@@ -39,13 +39,15 @@ def calc_zbrush_border(area, region, scale=0.05, abs_min=16):
     wrk_sz = min(clickable_region_size.x, clickable_region_size.y)
     return max(wrk_sz*scale, abs_min)
 
-def calc_selection_center(context): # View3D area is assumed
+def calc_selection_center(context, non_obj_zero=False): # View3D area is assumed
     context_mode = context.mode
     active_object = context.active_object
     m = (active_object.matrix_world if active_object else None)
     positions = []
     
-    if (context_mode == 'OBJECT') or (not active_object):
+    is_object_mode = (context_mode == 'OBJECT') or (not active_object)
+    
+    if is_object_mode:
         m = None
         positions.extend(obj.matrix_world.translation for obj in context.selected_objects)
     elif context_mode == 'EDIT_MESH':
@@ -78,7 +80,8 @@ def calc_selection_center(context): # View3D area is assumed
         # Currently there is no API for element.select
         #positions.extend(elem.co for elem in active_object.data.elements if elem.select)
     elif context_mode == 'EDIT_LATTICE':
-        positions.extend(point.co for point in active_object.data.points if point.select)
+        # Not point.co! point.co returns very strange and often very big numbers
+        positions.extend(point.co_deform for point in active_object.data.points if point.select)
     elif context_mode == 'EDIT_ARMATURE':
         for bone in active_object.data.edit_bones:
             if bone.select_head:
@@ -103,6 +106,8 @@ def calc_selection_center(context): # View3D area is assumed
         positions.append(Vector()) # use active object's position
     
     if len(positions) == 0:
+        if (not is_object_mode) and non_obj_zero:
+            return m * Vector()
         return None
     
     n_positions = len(positions)

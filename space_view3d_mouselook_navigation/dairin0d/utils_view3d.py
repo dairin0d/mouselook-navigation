@@ -33,22 +33,52 @@ from bpy_extras.view3d_utils import (
 
 import math
 
+from .bpy_inspect import BlEnums
 from .utils_math import matrix_LRS, angle_signed, snap_pixel_vector, lerp
-from .utils_ui import calc_region_rect
+from .utils_ui import calc_region_rect, convert_ui_coord, ui_context_under_coord
+from .utils_gl import cgl
+from .utils_blender import Selection, SelectionSnapshot
 
 class SmartView3D:
-    def __init__(self, context=None):
+    def __new__(cls, context=None, **kwargs):
         if context is None:
             context = bpy.context
+        elif isinstance(context, (Vector, tuple)):
+            context_override = ui_context_under_coord(context[0], context[1],
+                (context[2] if len(context) > 2 else 1))
+            if not context_override:
+                return None
+            context_override.update(kwargs)
+            kwargs = context_override
+            context = bpy.context
+        
+        area = kwargs.get("area") or context.area
+        if area.type != 'VIEW_3D':
+            return None
+        
+        region = kwargs.get("region") or context.region
+        if region.type != 'WINDOW':
+            return None
+        
+        region_data = kwargs.get("region_data") or context.region_data
+        if not region_data:
+            return None
+        
+        window = kwargs.get("window") or context.window
+        space_data = kwargs.get("space_data") or context.space_data
+        
+        self = object.__new__(cls)
         self.userprefs = bpy.context.user_preferences
-        self.window = context.window # expected type: Window
-        self.area = context.area # expected type: Area
-        self.region = context.region # expected type: Region
-        self.space_data = context.space_data # expected type: SpaceView3D
-        self.region_data = context.region_data # expected type: RegionView3D
-        self.use_camera_axes = False
-        self.use_viewpoint =  False
-        self.bypass_camera_lock = False
+        self.window = window
+        self.area = area
+        self.region = region
+        self.space_data = space_data
+        self.region_data = region_data
+        self.use_camera_axes = kwargs.get("use_camera_axes", False)
+        self.use_viewpoint =  kwargs.get("use_viewpoint", False)
+        self.bypass_camera_lock = kwargs.get("bypass_camera_lock", False)
+        
+        return self
     
     def __get(self):
         return self.space_data.lock_cursor
@@ -109,11 +139,11 @@ class SmartView3D:
     # 2: bottom right (Right Ortho)
     # 3: top right (User Persp)
     def __get(self):
-        return self.space_data.region_quadviews
+        return getattr(self.space_data, "region_quadviews")
     quadviews = property(__get)
     
     def __get(self):
-        return len(self.space_data.region_quadviews) != 0
+        return bool(self.quadviews)
     quadview_enabled = property(__get)
     
     def __get(self):
@@ -249,6 +279,20 @@ class SmartView3D:
     is_perspective = property(__get, __set)
     
     def __get(self):
+        region_center = Vector((self.region.width, self.region.height)) * 0.5
+        if self.is_camera and (not self.is_perspective):
+            return region_center # Somewhy Blender behaves like this
+        return region_center - self.camera_offset_pixels
+    focus_projected = property(__get)
+    
+    def __get(self):
+        rv3d = self.region_data
+        if rv3d.is_perspective or (rv3d.view_perspective == 'CAMERA'):
+            return (self.clip_start, self.clip_end, self.viewpoint)
+        return (-self.clip_end*0.5, self.clip_end*0.5, self.focus)
+    zbuf_range = property(__get)
+    
+    def __get(self):
         return self.region_data.view_distance
     def __set(self, value):
         if self.quadview_sync and (not self.is_region_3d):
@@ -292,15 +336,6 @@ class SmartView3D:
             self.region_data.view_rotation = value.copy()
             self.region_data.update()
     raw_rotation = property(__get, __set)
-    
-    def __get(self):
-        return (self.viewpoint if self.use_viewpoint else self.focus)
-    def __set(self, value):
-        if self.use_viewpoint:
-            self.viewpoint = value
-        else:
-            self.focus = value
-    pivot = property(__get, __set)
     
     def __get(self):
         if self.is_camera and (self.camera.type == 'CAMERA') and (self.camera.data.type == 'ORTHO'):
@@ -443,6 +478,15 @@ class SmartView3D:
         self.focus = self.focus + (value - self.viewpoint)
     viewpoint = property(__get, __set)
     
+    def __get(self):
+        return (self.viewpoint if self.use_viewpoint else self.focus)
+    def __set(self, value):
+        if self.use_viewpoint:
+            self.viewpoint = value
+        else:
+            self.focus = value
+    pivot = property(__get, __set)
+    
     def __get(self, viewpoint=False):
         m = self.rotation.to_matrix()
         m.resize_4x4()
@@ -468,68 +512,11 @@ class SmartView3D:
     left = property(lambda self: self.__get_axis(-1, 0, 0))
     right = property(lambda self: self.__get_axis(1, 0, 0))
     
-    def project(self, pos, align=False): # 0,0 means region's bottom left corner
-        region = self.region
-        rv3d = self.region_data
-        xy = location_3d_to_region_2d(region, rv3d, pos.copy())
-        if align:
-            xy = snap_pixel_vector(xy)
-        return xy
+    def region_rect(self, overlap=True):
+        return calc_region_rect(self.area, self.region, overlap)
     
-    def unproject(self, xy, pos=None, align=False): # 0,0 means region's bottom left corner
-        if align:
-            xy = snap_pixel_vector(xy)
-        if pos is None:
-            pos = self.focus
-        elif isinstance(pos, (int, float)):
-            pos = self.zbuf_range[2] + self.forward * pos
-        region = self.region
-        rv3d = self.region_data
-        return region_2d_to_location_3d(region, rv3d, xy.copy(), pos.copy())
-    
-    def ray(self, xy): # 0,0 means region's bottom left corner
-        region = self.region
-        rv3d = self.region_data
-        
-        view_dir = self.forward
-        near, far, origin = self.zbuf_range
-        near = origin + view_dir * near
-        far = origin + view_dir * far
-        
-        a = region_2d_to_location_3d(region, rv3d, Vector(xy).to_2d(), near).to_3d()
-        b = region_2d_to_location_3d(region, rv3d, Vector(xy).to_2d(), far).to_3d()
-        return a, b
-    
-    @staticmethod
-    def read_zbuffer(xy, wh=(1, 1)): # xy is in window coordinates!
-        if isinstance(wh, (int, float)):
-            wh = (wh, wh)
-        elif len(wh) < 2:
-            wh = (wh[0], wh[0])
-        x, y, w, h = int(xy[0]), int(xy[1]), int(wh[0]), int(wh[1])
-        zbuf = bgl.Buffer(bgl.GL_FLOAT, [w*h])
-        bgl.glReadPixels(x, y, w, h, bgl.GL_DEPTH_COMPONENT, bgl.GL_FLOAT, zbuf)
-        return zbuf
-    
-    def zbuf_to_depth(self, zbuf):
-        near, far, origin = self.zbuf_range
-        depth_linear = zbuf*far + (1.0 - zbuf)*near
-        if self.is_perspective:
-            return (far * near) / (zbuf*near + (1.0 - zbuf)*far)
-        else:
-            return zbuf*far + (1.0 - zbuf)*near
-    
-    def depth(self, xy, region_coords=True):
-        if region_coords: # convert to window coords
-            xy = xy + Vector((self.region.x, self.region.y))
-        return self.zbuf_to_depth(self.read_zbuffer(xy)[0])
-    
-    def __get(self):
-        rv3d = self.region_data
-        if rv3d.is_perspective or (rv3d.view_perspective == 'CAMERA'):
-            return (self.clip_start, self.clip_end, self.viewpoint)
-        return (-self.clip_end*0.5, self.clip_end*0.5, self.focus)
-    zbuf_range = property(__get)
+    def convert_ui_coord(self, xy, src, dst, vector=True):
+        return convert_ui_coord(self.window, self.area, self.region, xy, src, dst, vector)
     
     def z_distance(self, pos, clamp_near=None, clamp_far=None):
         if clamp_far is None:
@@ -551,15 +538,314 @@ class SmartView3D:
         
         return dist
     
-    def region_rect(self, overlap=True):
-        return calc_region_rect(self.area, self.region, overlap)
+    def project(self, pos, align=False, coords='REGION'):
+        region = self.region
+        rv3d = self.region_data
+        
+        xy = location_3d_to_region_2d(region, rv3d, pos.copy())
+        
+        if align:
+            xy = snap_pixel_vector(xy)
+        
+        return self.convert_ui_coord(xy, 'REGION', coords)
     
-    def __get(self):
-        region_center = Vector((self.region.width, self.region.height)) * 0.5
-        if self.is_camera and (not self.is_perspective):
-            return region_center # Somewhy Blender behaves like this
-        return region_center - self.camera_offset_pixels
-    focus_projected = property(__get)
+    def unproject(self, xy, pos=None, align=False, coords='REGION'):
+        region = self.region
+        rv3d = self.region_data
+        
+        xy = self.convert_ui_coord(xy, coords, 'REGION')
+        
+        if align:
+            xy = snap_pixel_vector(xy)
+        
+        if pos is None:
+            pos = self.focus
+        elif isinstance(pos, (int, float)):
+            pos = self.zbuf_range[2] + self.forward * pos
+        
+        return region_2d_to_location_3d(region, rv3d, xy.copy(), pos.copy()).to_3d()
+    
+    def ray(self, xy, coords='REGION'):
+        region = self.region
+        rv3d = self.region_data
+        
+        xy = self.convert_ui_coord(xy, coords, 'REGION')
+        
+        view_dir = self.forward
+        near, far, origin = self.zbuf_range
+        near = origin + view_dir * near
+        far = origin + view_dir * far
+        
+        # Just to be sure (sometimes scene.ray_cast said that ray start/end aren't 3D)
+        a = region_2d_to_location_3d(region, rv3d, xy.to_2d(), near).to_3d()
+        b = region_2d_to_location_3d(region, rv3d, xy.to_2d(), far).to_3d()
+        return a, b
+    
+    def read_zbuffer(self, xy, wh=(1, 1), centered=False, cached=True, coords='REGION'):
+        cached_zbuf = ZBufferRecorder.buffers.get(self.region)
+        if (not cached) or (cached_zbuf is None):
+            xy = self.convert_ui_coord(xy, coords, 'WINDOW', False)
+            return cgl.read_zbuffer(xy, wh, centered)
+        else:
+            xy = self.convert_ui_coord(xy, coords, 'REGION', False)
+            return cgl.read_zbuffer(xy, wh, centered, (cached_zbuf, self.region.width, self.region.height))
+    
+    def zbuf_to_depth(self, zbuf):
+        near, far, origin = self.zbuf_range
+        depth_linear = zbuf*far + (1.0 - zbuf)*near
+        if self.is_perspective:
+            return (far * near) / (zbuf*near + (1.0 - zbuf)*far)
+        else:
+            return zbuf*far + (1.0 - zbuf)*near
+    
+    def depth(self, xy, cached=True, coords='REGION'):
+        return self.zbuf_to_depth(self.read_zbuffer(xy, cached=cached, coords=coords)[0])
+    
+    # Extra arguments (all False by default):
+    # extend: add the result to the selection or replace the selection with the result
+    # deselect: remove the result from the selection
+    # toggle: toggle the result's selected state
+    # center: use objects' centers, not their contents (geometry)
+    # enumerate: list objects/elements?
+    # object: if enabled, in edit mode will select objects instead of elements
+    def select(self, xy, modify=False, obj_too=True, cycle=False, select_mode={'VERT','EDGE','FACE'}, coords='REGION', **kwargs):
+        xy = self.convert_ui_coord(xy, coords, 'REGION', False)
+        
+        scene = bpy.context.scene
+        active_object = bpy.context.active_object
+        edit_object = bpy.context.edit_object
+        tool_settings = bpy.context.tool_settings
+        
+        context_override = dict(
+            window=self.window,
+            screen=self.window.screen,
+            area=self.area,
+            region=self.region,
+            space_data=self.space_data,
+            region_data=self.region_data,
+            # bpy.ops.view3d.select needs these to be overridden too
+            scene=scene,
+            active_object=active_object,
+            edit_object=edit_object,
+        )
+        
+        if not modify:
+            prev_selection = SelectionSnapshot()
+        else:
+            obj_too = False
+        
+        if obj_too: # obj_too means we want to get either object or element, whichever is closer
+            sel = prev_selection.snapshot_curr[0] # current mode
+            sel_obj = prev_selection.snapshot_obj[0] # object mode
+        else:
+            sel = Selection() # current mode
+        mode = sel.normalized_mode
+        
+        # In paint/sculpt modes, we need to look at selection of Object mode
+        # In edit modes, we need to first query edit mode, and if it fails, query object mode
+        
+        rw, rh = self.region.width, self.region.height
+        xyOther = (int((xy[0] + rw//2) % rw), int((xy[1] + rh//2) % rh))
+        
+        if not cycle: # "not cycle" means we want to always get the object closest to camera
+            kwargs.pop("extend", None)
+            kwargs.pop("deselect", None)
+            kwargs.pop("toggle", None)
+            kwargs.pop("enumerate", None)
+            
+            # Select at different coordinate to avoid cycling behavior
+            bpy.ops.view3d.select(context_override, 'EXEC_DEFAULT', location=xyOther, object=kwargs.get("object", False))
+            
+            # clear the selection
+            if obj_too:
+                sel.selected = {}
+                if mode != 'OBJECT':
+                    sel_obj.selected = {}
+            else:
+                sel.selected = {}
+        
+        # Note: view3d.select does NOT select anything in Particle Edit mode
+        
+        is_object_selection = (mode == 'OBJECT') or (mode in BlEnums.paint_sculpt_modes)
+        
+        if select_mode:
+            prev_select_mode = tool_settings.mesh_select_mode
+            tool_settings.mesh_select_mode = ('VERT' in select_mode, 'EDGE' in select_mode, 'FACE' in select_mode)
+        
+        if obj_too:
+            kwargs["extend"] = False
+            kwargs["deselect"] = False
+            kwargs["toggle"] = False
+            kwargs["enumerate"] = False
+            
+            if not is_object_selection:
+                kwargs["object"] = True
+                bpy.ops.view3d.select(context_override, 'EXEC_DEFAULT', location=xy, **kwargs)
+            
+            kwargs["object"] = False
+            bpy.ops.view3d.select(context_override, 'EXEC_DEFAULT', location=xy, **kwargs)
+        else:
+            bpy.ops.view3d.select(context_override, 'EXEC_DEFAULT', location=xy, **kwargs)
+        
+        if select_mode:
+            tool_settings.mesh_select_mode = prev_select_mode
+        
+        selected_object = None
+        selected_element = None
+        selected_bmesh = None
+        background_object = None
+        
+        if not modify:
+            result = SelectionSnapshot()
+            
+            # Analyze the result
+            sel = result.snapshot_curr[0] # current mode
+            sel_obj = result.snapshot_obj[0] # object mode
+            
+            if is_object_selection:
+                sel, active, history, selected = result.snapshot_obj
+                selected_object = next(iter(selected), None) # only one object is expected
+            else:
+                sel, active, history, selected = result.snapshot_curr
+                selected_element = next(iter(selected), None) # only one element is expected
+                
+                if selected_element:
+                    selected_bmesh = sel.bmesh
+                    selected_object = active_object
+                    
+                    sel, active, history, selected = result.snapshot_obj
+                    background_object = next(iter(selected), None) # only one object is expected
+                else:
+                    sel, active, history, selected = result.snapshot_obj
+                    selected_object = next(iter(selected), None) # only one object is expected
+            
+            prev_selection.restore()
+        
+        return (selected_object, selected_element, selected_bmesh, background_object)
+    
+    def __radial_search_pattern(r):
+        points = []
+        rr = r * r
+        for y in range(-r, r+1):
+            for x in range(-r, r+1):
+                d2 = x*x + y*y
+                if d2 <= rr:
+                    points.append((x, y, d2))
+        points.sort(key=lambda item: item[2])
+        return points
+    __radial_search_pattern = __radial_search_pattern(64)
+    
+    # success, object, matrix, location, normal
+    def ray_cast(self, xy, radius=0, scene=None, coords='REGION'):
+        if not scene:
+            scene = bpy.context.scene
+        
+        radius = int(radius)
+        search = (radius > 0)
+        if not search:
+            ray = self.ray(xy, coords=coords)
+            return scene.ray_cast(ray[0], ray[1])
+        else:
+            x, y = xy
+            rr = radius * radius
+            for dxy in self.__radial_search_pattern:
+                if dxy[2] > rr: break
+                ray = self.ray((x+dxy[0], y+dxy[1]), coords=coords)
+                rc = scene.ray_cast(ray[0], ray[1])
+                if rc[0]: return rc
+            return (False, None, Matrix(), Vector(), Vector())
+    
+    # success, object, matrix, location, normal
+    def depth_cast(self, xy, radius=0, cached=True, coords='REGION'):
+        xy = self.convert_ui_coord(xy, coords, 'REGION', False)
+        
+        radius = int(radius)
+        search = (radius > 0)
+        radius = max(radius, 1)
+        sz = radius * 2 + 1 # kernel size
+        w, h = sz, sz
+        
+        zbuf = self.read_zbuffer(xy, (sz, sz), centered=True, cached=cached)
+        
+        def get_pos(x, y):
+            wnd_x = min(max(x+radius, 0), w-1)
+            wnd_y = min(max(y+radius, 0), h-1)
+            z = zbuf[wnd_x + wnd_y * w]
+            if (z >= 1.0) or (z < 0.0): return None
+            d = self.zbuf_to_depth(z)
+            return self.unproject((xy[0]+x, xy[1]+y), d)
+        
+        cx, cy = 0, 0
+        center = None
+        if search:
+            rr = radius * radius
+            for dxy in self.__radial_search_pattern:
+                if dxy[2] > rr: break
+                p = get_pos(dxy[0], dxy[1])
+                if p is not None:
+                    cx, cy = dxy[0], dxy[1]
+                    center = p
+                    break
+        else:
+            center = get_pos(0, 0)
+        
+        if center is None:
+            return (False, None, Matrix(), Vector(), Vector())
+        
+        normal_count = 0
+        normal = Vector()
+        
+        last_i = -10 # just some big number
+        last_p = None
+        neighbors = ((-1, -1), (0, -1), (1, -1), (1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1))
+        for i, nbc in enumerate(neighbors):
+            nbx, nby = nbc
+            p = get_pos(cx + nbx, cy + nby)
+            if p is None: continue
+            if (i - last_i) < 4:
+                d0 = last_p - center
+                d1 = p - center
+                normal += d0.cross(d1).normalized()
+                normal_count += 1
+            last_p = p
+            last_i = i
+        
+        if normal_count > 1:
+            normal.normalize()
+        
+        return (True, None, Matrix(), center, normal)
     
     del __get
     del __set
+
+# Blender has a tendency to clear the contents of Z-buffer during its default operation,
+# so user operators usually don't have ability to use depth buffer at their invocation.
+# This hack attempts to alleviate this problem, at the cost of likely stalling GL pipeline.
+class ZBufferRecorder:
+    buffers = {}
+    queue = []
+    
+    def draw_callback_px(self, context):
+        context = bpy.context # we need most up-to-date context
+        area = context.area
+        region = context.region
+        xy = (region.x, region.y)
+        wh = (region.width, region.height)
+        zbuf = cgl.read_zbuffer(xy, wh)
+        
+        buffers = ZBufferRecorder.buffers
+        queue = ZBufferRecorder.queue
+        
+        if region in buffers:
+            # If region is encountered the second time, Blender has made a full redraw cycle.
+            # We can safely discard old caches.
+            index = queue.index(region)
+            for i in range(index+1):
+                buffers.pop(queue[i], None)
+            queue = queue[index+1:]
+            ZBufferRecorder.queue = queue
+        
+        buffers[region] = zbuf
+        queue.append(region)
+
+ZBufferRecorder.handler = bpy.types.SpaceView3D.draw_handler_add(ZBufferRecorder.draw_callback_px, (None, None), 'WINDOW', 'POST_PIXEL')

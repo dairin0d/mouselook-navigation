@@ -345,6 +345,8 @@ class KeyMapUtils:
                     return i
             return None
         
+        src_count = len(km.keymap_items)
+        only_append = True
         for after, kmi_data, before in kmi_datas:
             i_after = (insertion_index(after, True) if after else None)
             i_before = (insertion_index(before, False) if before else None)
@@ -358,9 +360,14 @@ class KeyMapUtils:
             else:
                 i = (i_after+1 if "*" not in after else i_before)
             
+            only_append &= (i >= src_count)
+            
             km_items.insert(i, kmi_data)
         
-        KeyMapUtils.clear(km)
-        
-        for kmi_data in km_items:
-            KeyMapUtils.deserialize(km, kmi_data)
+        if only_append:
+            for kmi_data in km_items[src_count:]:
+                KeyMapUtils.deserialize(km, kmi_data)
+        else:
+            KeyMapUtils.clear(km)
+            for kmi_data in km_items:
+                KeyMapUtils.deserialize(km, kmi_data)

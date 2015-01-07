@@ -48,6 +48,79 @@ class BlEnums:
     region_types = {item.identifier for item in bpy.types.Region.bl_rna.properties["type"].enum_items}
     
     modes = {item.identifier for item in bpy.types.Context.bl_rna.properties["mode"].enum_items}
+    paint_sculpt_modes = {'SCULPT', 'VERTEX_PAINT', 'PAINT_VERTEX',
+        'WEIGHT_PAINT', 'PAINT_WEIGHT', 'TEXTURE_PAINT', 'PAINT_TEXTURE'}
+    
+    object_modes = {item.identifier for item in bpy.types.Object.bl_rna.properties["mode"].enum_items}
+    object_types = {item.identifier for item in bpy.types.Object.bl_rna.properties["type"].enum_items}
+    object_types_editable = {'MESH', 'CURVE', 'SURFACE', 'META', 'FONT', 'ARMATURE', 'LATTICE'}
+    object_types_geometry = {'MESH', 'CURVE', 'SURFACE', 'META', 'FONT'}
+    
+    object_mode_support = {
+        'MESH':{'OBJECT', 'EDIT', 'SCULPT', 'VERTEX_PAINT', 'WEIGHT_PAINT', 'TEXTURE_PAINT', 'PARTICLE_EDIT',
+            'EDIT_MESH', 'PAINT_WEIGHT', 'PAINT_VERTEX', 'PAINT_TEXTURE', 'PARTICLE'},
+        'CURVE':{'OBJECT', 'EDIT', 'EDIT_CURVE'},
+        'SURFACE':{'OBJECT', 'EDIT', 'EDIT_SURFACE'},
+        'META':{'OBJECT', 'EDIT', 'EDIT_METABALL'},
+        'FONT':{'OBJECT', 'EDIT', 'EDIT_TEXT'},
+        'ARMATURE':{'OBJECT', 'EDIT', 'POSE', 'EDIT_ARMATURE'},
+        'LATTICE':{'OBJECT', 'EDIT', 'EDIT_LATTICE'},
+        'EMPTY':{'OBJECT'},
+        'CAMERA':{'OBJECT'},
+        'LAMP':{'OBJECT'},
+        'SPEAKER':{'OBJECT'},
+    }
+    mode_object_support = {
+        'OBJECT':object_types,
+        'EDIT':object_types_editable,
+        'POSE':{'ARMATURE'},
+        'SCULPT':{'MESH'},
+        'VERTEX_PAINT':{'MESH'},
+        'PAINT_VERTEX':{'MESH'},
+        'WEIGHT_PAINT':{'MESH'},
+        'PAINT_WEIGHT':{'MESH'},
+        'TEXTURE_PAINT':{'MESH'},
+        'PAINT_TEXTURE':{'MESH'},
+        'PARTICLE_EDIT':{'MESH'},
+        'PARTICLE':{'MESH'},
+        'EDIT_MESH':{'MESH'},
+        'EDIT_CURVE':{'CURVE'},
+        'EDIT_SURFACE':{'SURFACE'},
+        'EDIT_TEXT':{'FONT'},
+        'EDIT_ARMATURE':{'ARMATURE'},
+        'EDIT_METABALL':{'META'},
+        'EDIT_LATTICE':{'LATTICE'},
+    },
+    
+    __generic_mode_map = {'OBJECT':'OBJECT', 'POSE':'POSE', 'SCULPT':'SCULPT', 'VERTEX_PAINT':'PAINT_VERTEX',
+        'WEIGHT_PAINT':'PAINT_WEIGHT', 'TEXTURE_PAINT':'PAINT_TEXTURE', 'PARTICLE_EDIT':'PARTICLE'}
+    __edit_mode_map = {'MESH':'EDIT_MESH', 'CURVE':'EDIT_CURVE', 'SURFACE':'EDIT_SURFACE',
+        'META':'EDIT_METABALL', 'FONT':'EDIT_TEXT', 'ARMATURE':'EDIT_ARMATURE', 'LATTICE':'EDIT_LATTICE'}
+    @classmethod
+    def mode_from_object(cls, obj):
+        if not obj:
+            return 'OBJECT'
+        return cls.__generic_mode_map.get(obj.mode) or cls.__edit_mode_map.get(obj.type)
+    
+    __mode_to_obj_map = {'EDIT_MESH':'EDIT', 'EDIT_CURVE':'EDIT', 'EDIT_SURFACE':'EDIT', 'EDIT_TEXT':'EDIT',
+        'EDIT_ARMATURE':'EDIT', 'EDIT_METABALL':'EDIT', 'EDIT_LATTICE':'EDIT', 'POSE':'POSE', 'SCULPT':'SCULPT',
+        'PAINT_WEIGHT':'WEIGHT_PAINT', 'PAINT_VERTEX':'VERTEX_PAINT', 'PAINT_TEXTURE':'TEXTURE_PAINT',
+        'PARTICLE':'PARTICLE_EDIT', 'OBJECT':'OBJECT'}
+    @classmethod
+    def mode_to_object(cls, context_mode):
+        return cls.__mode_to_obj_map.get(context_mode)
+    
+    @classmethod
+    def normalize_mode(cls, mode, obj=None):
+        if mode in cls.modes:
+            return mode
+        if mode == 'EDIT':
+            return (cls.__edit_mode_map.get(obj.type) if obj else None)
+        return cls.__generic_mode_map.get(mode)
+    
+    @classmethod
+    def is_mode_valid(cls, mode, obj=None):
+        return (mode in cls.object_mode_support[obj.type] if obj else mode == 'OBJECT')
     
     # Panel.bl_context is not a enum property, so we can't get all possible values through introspection
     panel_contexts = {
