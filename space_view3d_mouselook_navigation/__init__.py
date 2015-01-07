@@ -21,7 +21,7 @@ bl_info = {
     "name": "Mouselook Navigation",
     "description": "Alternative 3D view navigation",
     "author": "dairin0d, moth3r",
-    "version": (1, 0, 3),
+    "version": (1, 0, 4),
     "blender": (2, 7, 0),
     "location": "View3D > orbit/pan/dolly/zoom/fly/walk",
     "warning": "",
@@ -859,8 +859,15 @@ class MouselookNavigation:
         mouse_region = mouse - region_pos
         mouse_clickable_region = mouse - clickable_region_pos
         
-        raycast_result = self.sv.ray_cast(mouse_region)
-        depthcast_result = self.sv.depth_cast(mouse_region, addon_prefs.zbrush_radius)
+        depthcast_radius = addon_prefs.zbrush_radius
+        raycast_radius = min(addon_prefs.zbrush_radius, 16)
+        
+        if addon_prefs.zbrush_method == 'ZBUFFER':
+            cast_result = self.sv.depth_cast(mouse_region, depthcast_radius)
+        elif addon_prefs.zbrush_method == 'RAYCAST':
+            cast_result = self.sv.ray_cast(mouse_region, raycast_radius)
+        else: # SELECTION
+            cast_result = (False, None) # Auto Depth is useless with ZBrush mode anyway
         
         self.zoom_to_selection = addon_prefs.zoom_to_selection
         self.force_origin_mouse = self.keys_origin_mouse()
@@ -878,8 +885,8 @@ class MouselookNavigation:
         if self.use_origin_selection:
             self.explicit_orbit_origin = calc_selection_center(context, True)
         elif self.use_origin_mouse:
-            if depthcast_result[0]:
-                self.explicit_orbit_origin = depthcast_result[3]
+            if cast_result[0]:
+                self.explicit_orbit_origin = cast_result[3]
                 if self.sv.is_perspective:
                     # Blender adjusts distance so that focus and z-point lie in the same plane
                     viewpoint = self.sv.viewpoint
@@ -893,13 +900,16 @@ class MouselookNavigation:
         self.mode_stack.update()
         if self.mode_stack.mode == 'NONE':
             if self.zbrush_mode:
-                is_over_obj = depthcast_result[0] # raycast_result[0] -- not up-to-date and ignores non-geometry
                 mouse_region_11 = clickable_region_size - mouse_clickable_region
                 wrk_x = min(mouse_clickable_region.x, mouse_region_11.x)
                 wrk_y = min(mouse_clickable_region.y, mouse_region_11.y)
                 wrk_pos = min(wrk_x, wrk_y)
-                if is_over_obj and (wrk_pos > self.zbrush_border):
-                    return {'PASS_THROUGH'}
+                if wrk_pos > self.zbrush_border:
+                    if addon_prefs.zbrush_method == 'SELECTION':
+                        select_result = self.sv.select(mouse_region)
+                        cast_result = (select_result[0] != None, select_result[0])
+                    if cast_result[0]:
+                        return {'PASS_THROUGH'}
             self.mode_stack.mode = self.default_mode
         self.update_cursor_icon(context)
         
@@ -1374,6 +1384,7 @@ class ThisAddonPreferences:
     universal_input_settings = MouselookNavigation_InputSettings | prop()
     
     zbrush_radius = 20 | prop("In ZBrush mode, allow navigation only when distance (in pixels) to the nearest geometry is greater than this value", name="ZBrush radius", min=0, max=64)
+    zbrush_method = 'ZBUFFER' | prop("Which method to use to determine if mouse is over empty space", name="ZBrush method", items=[('RAYCAST', "Raycast"), ('ZBUFFER', "Z-buffer"), ('SELECTION', "Selection")])
     
     is_enabled = True | prop("Enable/disable Mouselook Navigation", name="Enabled")
     
@@ -1404,7 +1415,7 @@ class ThisAddonPreferences:
                 layout.prop(self, "show_focus")
             with layout.column():
                 with layout.row():
-                    layout.label("")
+                    layout.prop_menu_enum(self, "zbrush_method")
                     layout.prop(self, "use_blender_colors")
                 with layout.column()(active=not self.use_blender_colors):
                     layout.row().prop(self, "color_zbrush_border")
