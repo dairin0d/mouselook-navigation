@@ -19,7 +19,7 @@ bl_info = {
     "name": "Mouselook Navigation",
     "description": "Alternative 3D view navigation",
     "author": "dairin0d, moth3r",
-    "version": (1, 0, 6),
+    "version": (1, 0, 7),
     "blender": (2, 7, 0),
     "location": "View3D > orbit/pan/dolly/zoom/fly/walk",
     "warning": "",
@@ -945,6 +945,14 @@ class MouselookNavigation:
         self.teleport_time_start = -1
         self.teleport_allowed = False
         
+        self.sculpt_levels0 = None
+        if (context.mode == 'SCULPT') and context.tool_settings.sculpt.show_low_resolution:
+            for modifier in context.object.modifiers:
+                if modifier.type == 'MULTIRES':
+                    self.sculpt_levels0 = modifier.sculpt_levels
+                    modifier.sculpt_levels = min(modifier.sculpt_levels, 1)
+                    break
+        
         userprefs.inputs.use_mouse_continuous = True
         
         self.register_handlers(context)
@@ -972,6 +980,12 @@ class MouselookNavigation:
         elif self.mode_stack.mode in {'FLY', 'FPS'}:
             focus_proj = self.sv.focus_projected + self.sv.region_rect()[0]
             context.window.cursor_warp(focus_proj.x, focus_proj.y)
+        
+        if (context.mode == 'SCULPT') and context.tool_settings.sculpt.show_low_resolution:
+            for modifier in context.object.modifiers:
+                if modifier.type == 'MULTIRES':
+                    modifier.sculpt_levels = self.sculpt_levels0
+                    break
         
         userprefs = context.user_preferences
         userprefs.inputs.use_mouse_continuous = self._continuous0
@@ -1365,6 +1379,10 @@ class ThisAddonPreferences:
     
     is_enabled = True | prop("Enable/disable Mouselook Navigation", name="Enabled")
     
+    def use_zbuffer_update(self, context):
+        addon.use_zbuffer = addon.preferences.use_zbuffer
+    use_zbuffer = True | prop("Preemptively grab Z-buffer (WARNING: CAN BE SLOW!)", name="Record Z-buffer", update=use_zbuffer_update)
+    
     flips = NavigationDirectionFlip | prop()
     
     zoom_speed_modifier = 1.0 | prop("Zooming speed", name="Zoom speed")
@@ -1383,6 +1401,9 @@ class ThisAddonPreferences:
         layout = NestedLayout(self.layout)
         
         use_universal_input_settings = (self.use_universal_input_settings or len(self.autoreg_keymaps) == 0)
+        
+        with layout.row():
+            layout.prop(self, "use_zbuffer")
         
         with layout.row():
             with layout.column():
@@ -1443,8 +1464,8 @@ class ThisAddonPreferences:
             inp_set.draw(layout)
 
 def register():
-    addon.use_zbuffer = True
     addon.register()
+    addon.use_zbuffer = addon.preferences.use_zbuffer
     
     addon.draw_handler_add(bpy.types.SpaceView3D, draw_callback_px, (None, None), 'WINDOW', 'POST_PIXEL')
     
