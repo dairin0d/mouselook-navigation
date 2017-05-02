@@ -722,6 +722,18 @@ class MouselookNavigation:
         if use_auto_perspective:
             self.sv.is_perspective = self._perspective0
     
+    numpad_orientations = [
+        ('LEFT', Quaternion((0, 0, -1), math.pi/2.0)),
+        ('RIGHT', Quaternion((0, 0, 1), math.pi/2.0)),
+        ('BOTTOM', Quaternion((1, 0, 0), math.pi/2.0)),
+        ('TOP', Quaternion((-1, 0, 0), math.pi/2.0)),
+        ('FRONT', Quaternion((1, 0, 0, 0))),
+        ('BACK', Quaternion((0, 0, 0, 1))),
+        ('BACK', Quaternion((0, 0, 0, -1))),
+    ]
+    def detect_numpad_orientation(self, q):
+        for name, nq in self.numpad_orientations:
+            if abs(q.rotation_difference(nq).angle) < 1e-6: return name
     def snap_rotation(self, n=1):
         grid = math.pi*0.5 / n
         euler = self.euler.copy()
@@ -730,6 +742,9 @@ class MouselookNavigation:
         euler.z = round(euler.z / grid) * grid
         self.sv.turntable_euler = euler
         self.rot = self.sv.rotation
+        numpad_orientation = self.detect_numpad_orientation(self.rot)
+        if numpad_orientation:
+            bpy.ops.view3d.viewnumpad(type=numpad_orientation, align_active=False)
     
     def change_euler(self, ex, ey, ez, always_up=False):
         self.euler.x += ex
@@ -1391,7 +1406,7 @@ class ThisAddonPreferences:
     fps_horizontal = False | prop("Force forward/backward to be in horizontal plane, and up/down to be vertical", name="FPS horizontal")
     zoom_to_selection = True | prop("Zoom to selection when Rotate Around Selection is enabled", name="Zoom to selection")
     trackball_mode = 'WRAPPED' | prop("Rotation algorithm used in trackball mode", name="Trackball mode", items=[('BLENDER', 'Blender', 'Blender (buggy!)', 'ERROR'), ('WRAPPED', 'Wrapped'), ('CENTER', 'Center')])
-    rotation_snap_subdivs = 1 | prop("Intermediate angles used when snapping (1: 90°, 2: 45°, 3: 30°, etc.)", name="Orbit snap subdivs", min=1)
+    rotation_snap_subdivs = 2 | prop("Intermediate angles used when snapping (1: 90°, 2: 45°, 3: 30°, etc.)", name="Orbit snap subdivs", min=1)
     rotation_snap_autoperspective = True | prop("If Auto Perspective is enabled, rotation snapping will automatically switch the view to Ortho", name="Orbit snap->ortho")
     autolevel_trackball = False | prop("Autolevel in Trackball mode", name="Trackball Autolevel")
     autolevel_trackball_up = False | prop("Try to autolevel 'upright' in Trackball mode", name="Trackball Autolevel up")
