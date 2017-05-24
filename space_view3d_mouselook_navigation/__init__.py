@@ -745,6 +745,8 @@ class MouselookNavigation:
         numpad_orientation = self.detect_numpad_orientation(self.rot)
         if numpad_orientation:
             bpy.ops.view3d.viewnumpad(type=numpad_orientation, align_active=False)
+        else:
+            bpy.ops.view3d.view_orbit(angle=0.0, type='ORBITUP')
     
     def change_euler(self, ex, ey, ez, always_up=False):
         self.euler.x += ex
@@ -939,6 +941,7 @@ class MouselookNavigation:
         self._pos0 = self.sv.focus
         self._rot0 = self.sv.rotation
         self._euler0 = self.sv.turntable_euler
+        self._smooth_view0 = userprefs.view.smooth_view
         
         self.mouse0 = self._mouse0.copy()
         self.clock0 = self._clock0
@@ -969,6 +972,7 @@ class MouselookNavigation:
                     break
         
         userprefs.inputs.use_mouse_continuous = True
+        userprefs.view.smooth_view = 0
         
         self.register_handlers(context)
         
@@ -1004,6 +1008,7 @@ class MouselookNavigation:
         
         userprefs = context.user_preferences
         userprefs.inputs.use_mouse_continuous = self._continuous0
+        userprefs.view.smooth_view = self._smooth_view0
         
         self.unregister_handlers(context)
         
